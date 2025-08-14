@@ -2,18 +2,17 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 import asyncio
-import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Optional, Union, cast
 
 import torch
 
-from vllm.config import ObservabilityConfig
 from vllm.outputs import (CompletionOutput, PoolingOutput,
                           PoolingRequestOutput, RequestOutput)
 from vllm.sampling_params import RequestOutputKind
-from vllm.tracing import (Tracer, SpanAttributes, SpanKind, extract_trace_context)
+from vllm.tracing import (SpanAttributes, SpanKind, Tracer,
+                          extract_trace_context)
 from vllm.transformers_utils.tokenizer import AnyTokenizer
 from vllm.transformers_utils.tokenizer_group import TokenizerGroup
 from vllm.v1.engine import EngineCoreOutput, EngineCoreRequest, FinishReason
@@ -61,7 +60,7 @@ class RequestOutputCollector:
         return output
 
     def get_nowait(
-            self) -> Optional[Union[RequestOutput, PoolingRequestOutput]]:
+        self, ) -> Optional[Union[RequestOutput, PoolingRequestOutput]]:
         """Non-blocking get operation."""
         output = self.output
         if output is not None:
@@ -74,7 +73,6 @@ class RequestOutputCollector:
 
 @dataclass
 class OutputProcessorOutput:
-
     request_outputs: list[Union[RequestOutput, PoolingRequestOutput]]
     reqs_to_abort: list[str]
 
@@ -111,8 +109,8 @@ class RequestState:
         self.is_prefilling = True
         self.queue = queue
 
-        self.stats = RequestStateStats(
-            arrival_time=arrival_time) if log_stats else None
+        self.stats = (RequestStateStats(
+            arrival_time=arrival_time) if log_stats else None)
 
     @classmethod
     def from_new_request(
@@ -125,7 +123,6 @@ class RequestState:
         queue: Optional[RequestOutputCollector],
         log_stats: bool,
     ) -> "RequestState":
-
         if sampling_params := request.sampling_params:
             if not sampling_params.detokenize:
                 tokenizer = None
@@ -172,7 +169,6 @@ class RequestState:
         kv_transfer_params: Optional[dict[str, Any]] = None,
         num_cached_tokens: int = 0,
     ) -> Optional[Union[RequestOutput, PoolingRequestOutput]]:
-
         finished = finish_reason is not None
         final_only = self.output_kind == RequestOutputKind.FINAL_ONLY
 
@@ -208,7 +204,6 @@ class RequestState:
         kv_transfer_params: Optional[dict[str, Any]] = None,
         num_cached_tokens: int = 0,
     ) -> Union[RequestOutput, PoolingRequestOutput]:
-
         if isinstance(outputs[0], PoolingOutput):
             assert len(outputs) == 1
             return PoolingRequestOutput(
@@ -241,7 +236,6 @@ class RequestState:
         finish_reason: Optional[FinishReason],
         stop_reason: Union[int, str, None],
     ) -> CompletionOutput:
-
         assert self.detokenizer is not None
         assert self.logprobs_processor is not None
         finished = finish_reason is not None
@@ -264,22 +258,20 @@ class RequestState:
             logprobs=logprobs,
             cumulative_logprob=self.logprobs_processor.cumulative_logprob,
             finish_reason=str(finish_reason) if finished else None,
-            stop_reason=stop_reason if finished else None)
+            stop_reason=stop_reason if finished else None,
+        )
 
     def _new_pooling_output(
         self,
         pooling_output: torch.Tensor,
     ) -> PoolingOutput:
-
         return PoolingOutput(data=pooling_output)
 
 
 class OutputProcessor:
     """Process EngineCoreOutputs into RequestOutputs."""
 
-    def __init__(self,
-                 tokenizer: TokenizerGroup,
-                 log_stats: bool):
+    def __init__(self, tokenizer: TokenizerGroup, log_stats: bool):
         self.log_stats = log_stats
         self.tokenizer = tokenizer
         self.request_states: dict[str, RequestState] = {}
@@ -329,16 +321,18 @@ class OutputProcessor:
         if request_id in self.request_states:
             raise ValueError(f"Request id {request_id} already running.")
 
-        tokenizer = None if not self.tokenizer else \
-            self.tokenizer.get_lora_tokenizer(request.lora_request)
+        tokenizer = (None if not self.tokenizer else
+                     self.tokenizer.get_lora_tokenizer(request.lora_request))
 
-        req_state = RequestState.from_new_request(tokenizer=tokenizer,
-                                                  request=request,
-                                                  prompt=prompt,
-                                                  parent_req=parent_req,
-                                                  request_index=request_index,
-                                                  queue=queue,
-                                                  log_stats=self.log_stats)
+        req_state = RequestState.from_new_request(
+            tokenizer=tokenizer,
+            request=request,
+            prompt=prompt,
+            parent_req=parent_req,
+            request_index=request_index,
+            queue=queue,
+            log_stats=self.log_stats,
+        )
         self.request_states[request_id] = req_state
         self.lora_states.add_request(req_state)
         if parent_req:
@@ -355,17 +349,17 @@ class OutputProcessor:
         1) Compute stats for logging
         2) Detokenize
         3) Create and handle RequestOutput objects:
-            * If there is a queue (for usage with AsyncLLM), 
+            * If there is a queue (for usage with AsyncLLM),
               put the RequestOutput objects into the queue for
               handling by the per-request generate() tasks.
 
-            * If there is no queue (for usage with LLMEngine), 
+            * If there is no queue (for usage with LLMEngine),
               return a list of RequestOutput objects.
 
         NOTE FOR DEVELOPERS
 
         vLLM V1 minimizes the number of python loops over the full
-        batch to ensure system overheads are minimized. This is the 
+        batch to ensure system overheads are minimized. This is the
         only function that should loop over EngineCoreOutputs.
 
         If you need to touch every element of the batch, do it from
@@ -383,9 +377,12 @@ class OutputProcessor:
                 continue
 
             # 1) Compute stats for this iteration.
-            self._update_stats_from_output(req_state, engine_core_output,
-                                           engine_core_timestamp,
-                                           iteration_stats)
+            self._update_stats_from_output(
+                req_state,
+                engine_core_output,
+                engine_core_timestamp,
+                iteration_stats,
+            )
 
             new_token_ids = engine_core_output.new_token_ids
             pooling_output = engine_core_output.pooling_output
@@ -412,8 +409,13 @@ class OutputProcessor:
 
             # 4) Create and handle RequestOutput objects.
             if request_output := req_state.make_request_output(
-                    new_token_ids, pooling_output, finish_reason, stop_reason,
-                    kv_transfer_params, num_cached_tokens):
+                    new_token_ids,
+                    pooling_output,
+                    finish_reason,
+                    stop_reason,
+                    kv_transfer_params,
+                    num_cached_tokens,
+            ):
                 if req_state.queue is not None:
                     # AsyncLLM: put into queue for handling by generate().
                     req_state.queue.put(request_output)
@@ -437,7 +439,8 @@ class OutputProcessor:
                 self._update_stats_from_finished(req_state, finish_reason,
                                                  iteration_stats)
                 if self.tracer:
-                    self.do_tracing(engine_core_output, req_state, iteration_stats)
+                    self.do_tracing(engine_core_output, req_state,
+                                    iteration_stats)
         self.lora_states.update_iteration_stats(iteration_stats)
 
         return OutputProcessorOutput(
@@ -445,10 +448,12 @@ class OutputProcessor:
             reqs_to_abort=reqs_to_abort,
         )
 
-    def do_tracing(self,
-               engine_core_output: EngineCoreOutput,
-               req_state: RequestState,
-               iteration_stats: Optional[IterationStats]) -> None:
+    def do_tracing(
+        self,
+        engine_core_output: EngineCoreOutput,
+        req_state: RequestState,
+        iteration_stats: Optional[IterationStats],
+    ) -> None:
         assert req_state.stats is not None
         assert iteration_stats is not None
         assert self.tracer is not None
@@ -459,36 +464,70 @@ class OutputProcessor:
                 "llm_request",
                 kind=SpanKind.SERVER,
                 context=trace_context,
-                start_time=arrival_time_nano_seconds) as span:
+                start_time=arrival_time_nano_seconds,
+        ) as span:
             metrics = req_state.stats
-            e2e_time = iteration_stats.iteration_timestamp - metrics.arrival_time
+            e2e_time = (iteration_stats.iteration_timestamp -
+                        metrics.arrival_time)
             queued_time = metrics.scheduled_ts - metrics.queued_ts
             prefill_time = metrics.first_token_ts - metrics.scheduled_ts
             decode_time = metrics.last_token_ts - metrics.first_token_ts
             inference_time = metrics.last_token_ts - metrics.scheduled_ts
-            span.set_attribute(SpanAttributes.GEN_AI_LATENCY_TIME_TO_FIRST_TOKEN, metrics.first_token_latency)
+            span.set_attribute(
+                SpanAttributes.GEN_AI_LATENCY_TIME_TO_FIRST_TOKEN,
+                metrics.first_token_latency,
+            )
             span.set_attribute(SpanAttributes.GEN_AI_LATENCY_E2E, e2e_time)
-            span.set_attribute(SpanAttributes.GEN_AI_LATENCY_TIME_IN_QUEUE, queued_time)
-            span.set_attribute(SpanAttributes.GEN_AI_USAGE_PROMPT_TOKENS, len(req_state.prompt_token_ids))
-            span.set_attribute(SpanAttributes.GEN_AI_USAGE_COMPLETION_TOKENS, metrics.num_generation_tokens)
-            span.set_attribute(SpanAttributes.GEN_AI_LATENCY_TIME_IN_MODEL_PREFILL, prefill_time)
-            span.set_attribute(SpanAttributes.GEN_AI_LATENCY_TIME_IN_MODEL_DECODE, decode_time)
-            span.set_attribute(SpanAttributes.GEN_AI_LATENCY_TIME_IN_MODEL_INFERENCE, inference_time)
+            span.set_attribute(SpanAttributes.GEN_AI_LATENCY_TIME_IN_QUEUE,
+                               queued_time)
+            span.set_attribute(
+                SpanAttributes.GEN_AI_USAGE_PROMPT_TOKENS,
+                len(req_state.prompt_token_ids),
+            )
+            span.set_attribute(
+                SpanAttributes.GEN_AI_USAGE_COMPLETION_TOKENS,
+                metrics.num_generation_tokens,
+            )
+            span.set_attribute(
+                SpanAttributes.GEN_AI_LATENCY_TIME_IN_MODEL_PREFILL,
+                prefill_time,
+            )
+            span.set_attribute(
+                SpanAttributes.GEN_AI_LATENCY_TIME_IN_MODEL_DECODE,
+                decode_time)
+            span.set_attribute(
+                SpanAttributes.GEN_AI_LATENCY_TIME_IN_MODEL_INFERENCE,
+                inference_time,
+            )
 
             # meta
-            span.set_attribute(SpanAttributes.GEN_AI_REQUEST_ID, req_state.request_id)
+            span.set_attribute(SpanAttributes.GEN_AI_REQUEST_ID,
+                               req_state.request_id)
             if req_state.parent_req and req_state.parent_req.sampling_params:
-                span.set_attribute(SpanAttributes.GEN_AI_REQUEST_TOP_P, req_state.parent_req.sampling_params.top_p)
-                span.set_attribute(SpanAttributes.GEN_AI_REQUEST_MAX_TOKENS,
-                                   req_state.parent_req.sampling_params.max_tokens)
-                span.set_attribute(SpanAttributes.GEN_AI_REQUEST_TEMPERATURE,
-                                   req_state.parent_req.sampling_params.temperature)
-                span.set_attribute(SpanAttributes.GEN_AI_REQUEST_N, req_state.parent_req.sampling_params.n)
+                span.set_attribute(
+                    SpanAttributes.GEN_AI_REQUEST_TOP_P,
+                    req_state.parent_req.sampling_params.top_p,
+                )
+                span.set_attribute(
+                    SpanAttributes.GEN_AI_REQUEST_MAX_TOKENS,
+                    req_state.parent_req.sampling_params.max_tokens,
+                )
+                span.set_attribute(
+                    SpanAttributes.GEN_AI_REQUEST_TEMPERATURE,
+                    req_state.parent_req.sampling_params.temperature,
+                )
+                span.set_attribute(
+                    SpanAttributes.GEN_AI_REQUEST_N,
+                    req_state.parent_req.sampling_params.n,
+                )
 
-    def _update_stats_from_output(self, req_state: RequestState,
-                                  engine_core_output: EngineCoreOutput,
-                                  engine_core_timestamp: Optional[float],
-                                  iteration_stats: Optional[IterationStats]):
+    def _update_stats_from_output(
+        self,
+        req_state: RequestState,
+        engine_core_output: EngineCoreOutput,
+        engine_core_timestamp: Optional[float],
+        iteration_stats: Optional[IterationStats],
+    ):
         if iteration_stats is None:
             return
 
@@ -496,15 +535,21 @@ class OutputProcessor:
 
         assert engine_core_timestamp is not None
         assert req_state.stats is not None
-        iteration_stats.update_from_output(engine_core_output,
-                                           engine_core_timestamp,
-                                           req_state.is_prefilling,
-                                           req_state.prompt_len,
-                                           req_state.stats, lora_stats)
+        iteration_stats.update_from_output(
+            engine_core_output,
+            engine_core_timestamp,
+            req_state.is_prefilling,
+            req_state.prompt_len,
+            req_state.stats,
+            lora_stats,
+        )
 
-    def _update_stats_from_finished(self, req_state: RequestState,
-                                    finish_reason: Optional[FinishReason],
-                                    iteration_stats: Optional[IterationStats]):
+    def _update_stats_from_finished(
+        self,
+        req_state: RequestState,
+        finish_reason: Optional[FinishReason],
+        iteration_stats: Optional[IterationStats],
+    ):
         if iteration_stats is None:
             return
 
@@ -514,9 +559,12 @@ class OutputProcessor:
             finish_reason=finish_reason,
             num_prompt_tokens=len(req_state.prompt_token_ids),
             max_tokens_param=req_state.max_tokens_param,
-            req_stats=req_state.stats)
+            req_stats=req_state.stats,
+        )
         self.lora_states.finish_request(req_state)
 
         ParentRequest.observe_finished_request(
-            req_state.parent_req, iteration_stats,
-            req_state.stats.num_generation_tokens)
+            req_state.parent_req,
+            iteration_stats,
+            req_state.stats.num_generation_tokens,
+        )
