@@ -3148,6 +3148,14 @@ class ObservabilityConfig:
     otlp_traces_endpoint: Optional[str] = None
     """Target URL to which OpenTelemetry traces will be sent."""
 
+    otlp_metrics_endpoint: Optional[str] = None
+    """Target URL to which OpenTelemetry metrics will be sent.
+
+    If set, vLLM will enable OpenTelemetry metrics in addition to Prometheus
+    metrics. Export configuration is expected to be managed by the user via
+    standard OpenTelemetry SDK configuration.
+    """
+
     collect_detailed_traces: Optional[list[DetailedTraceModules]] = None
     """It makes sense to set this only if `--otlp-traces-endpoint` is set. If
     set, it will collect detailed traces for the specified modules. This
@@ -3201,6 +3209,12 @@ class ObservabilityConfig:
             raise ValueError(
                 "OpenTelemetry is not available. Unable to configure "
                 "'otlp_traces_endpoint'. Ensure OpenTelemetry packages are "
+                f"installed. Original error:\n{otel_import_error_traceback}")
+
+        if not is_otel_available() and self.otlp_metrics_endpoint is not None:
+            raise ValueError(
+                "OpenTelemetry is not available. Unable to configure "
+                "'otlp_metrics_endpoint'. Ensure OpenTelemetry packages are "
                 f"installed. Original error:\n{otel_import_error_traceback}")
 
     def _parse_collect_detailed_traces(self):

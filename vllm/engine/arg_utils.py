@@ -819,6 +819,9 @@ class EngineArgs:
         observability_group.add_argument(
             "--otlp-traces-endpoint",
             **observability_kwargs["otlp_traces_endpoint"])
+        observability_group.add_argument(
+            "--otlp-metrics-endpoint",
+            **observability_kwargs["otlp_metrics_endpoint"])
         # TODO: generalise this special case
         choices = observability_kwargs["collect_detailed_traces"]["choices"]
         metavar = f"{{{','.join(choices)}}}"
