@@ -6,8 +6,8 @@ from typing import Optional, Union
 from typing import Dict
 
 from vllm.v1.metrics.loggers import PrometheusStatLogger
-from vllm.v1.metrics.agnostic_logger import MetricsProvider, _CounterHandle, \
-    _GaugeHandle, _HistogramHandle
+from vllm.v1.metrics.agnostic_logger import (_CounterHandle, _GaugeHandle,
+                                             _HistogramHandle)
 
 try:
     from ray.util import metrics as ray_metrics
@@ -48,47 +48,41 @@ class _RayHistogramHandle(_HistogramHandle):
         self._metric.observe(value)
 
 
-class _RayMetricsProvider(MetricsProvider):
-    def __init__(self) -> None:
-        if ray_metrics is None:
-            raise ImportError("Ray metrics provider requires Ray installed.")
+class RayPrometheusStatLogger(PrometheusStatLogger):
+    """PrometheusStatLogger backed by Ray metrics provider."""
 
-    def create_counter(self, name: str, description: str,
-                       labelnames: Optional[list[str]]) -> Metric:
+    def _create_counter(self, name: str, description: str,
+                        labelnames: list[str]) -> Metric:
         tag_keys = tuple(labelnames) if labelnames else None
         return ray_metrics.Counter(name=name, description=description,
                                    tag_keys=tag_keys)
 
-    def create_gauge(self, name: str, description: str,
-                     labelnames: Optional[list[str]]) -> Metric:
+    def _create_gauge(self, name: str, description: str,
+                      labelnames: list[str]) -> Metric:
         tag_keys = tuple(labelnames) if labelnames else None
         return ray_metrics.Gauge(name=name, description=description,
                                  tag_keys=tag_keys)
 
-    def create_histogram(self, name: str, description: str,
-                         labelnames: Optional[list[str]],
-                         buckets: Optional[list[float]] = None) -> Metric:
+    def _create_histogram(self, name: str, description: str,
+                          labelnames: list[str],
+                          buckets: Optional[list[float]] = None) -> Metric:
         tag_keys = tuple(labelnames) if labelnames else None
         boundaries = buckets if buckets else []
         return ray_metrics.Histogram(name=name, description=description,
                                      tag_keys=tag_keys,
                                      boundaries=boundaries)
 
-    def bind_labels_counter(self, metric: Metric,
-                            labels: Dict[str, str]) -> _CounterHandle:
+    def _bind_counter(self, metric: Metric,
+                      labels: Dict[str, str]) -> _CounterHandle:
         return _RayCounterHandle(metric, labels)
 
-    def bind_labels_gauge(self, metric: Metric,
-                          labels: Dict[str, str]) -> _GaugeHandle:
+    def _bind_gauge(self, metric: Metric,
+                    labels: Dict[str, str]) -> _GaugeHandle:
         return _RayGaugeHandle(metric, labels)
 
-    def bind_labels_histogram(self, metric: Metric,
-                              labels: Dict[str, str]) -> _HistogramHandle:
+    def _bind_histogram(self, metric: Metric,
+                         labels: Dict[str, str]) -> _HistogramHandle:
         return _RayHistogramHandle(metric, labels)
 
 
-class RayPrometheusStatLogger(PrometheusStatLogger):
-    """PrometheusStatLogger backed by Ray metrics provider."""
-
-    def _build_provider(self, vllm_config):
-        return _RayMetricsProvider()
+# End of file

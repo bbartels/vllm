@@ -33,53 +33,12 @@ class _HistogramHandle(ABC):
         ...
 
 
-class MetricsProvider(ABC):
-    """Provider interface that creates native metric instruments.
-
-    Implementations must return handles with a provider-agnostic API:
-    - Counter: inc(value)
-    - Gauge: set(value)
-    - Histogram: observe(value)
-    """
-
-    @abstractmethod
-    def create_counter(self, name: str, description: str,
-                       labelnames: Iterable[str]) -> Any:
-        ...
-
-    @abstractmethod
-    def create_gauge(self, name: str, description: str,
-                     labelnames: Iterable[str]) -> Any:
-        ...
-
-    @abstractmethod
-    def create_histogram(self, name: str, description: str,
-                         labelnames: Iterable[str],
-                         buckets: Optional[Iterable[float]] = None) -> Any:
-        ...
-
-    @abstractmethod
-    def bind_labels_counter(self, metric: Any,
-                            labels: Dict[str, str]) -> _CounterHandle:
-        ...
-
-    @abstractmethod
-    def bind_labels_gauge(self, metric: Any,
-                          labels: Dict[str, str]) -> _GaugeHandle:
-        ...
-
-    @abstractmethod
-    def bind_labels_histogram(self, metric: Any,
-                              labels: Dict[str, str]) -> _HistogramHandle:
-        ...
-
-
 class AgnosticMetricsLogger(StatLoggerBase, ABC):
     """Provider-agnostic metrics recorder.
 
     This class defines metric names and recording logic without depending on a
     specific backend (Prometheus, OpenTelemetry, etc.). Concrete subclasses
-    supply a MetricsProvider to create native instruments.
+    implement instrument creation/binding for their provider.
     """
 
     def __init__(self,
@@ -90,8 +49,6 @@ class AgnosticMetricsLogger(StatLoggerBase, ABC):
         self.engine_indexes = engine_indexes
         self.vllm_config = vllm_config
 
-        self._provider = self._build_provider(vllm_config)
-
         # Common labels for all metrics produced here
         self._labelnames = ("model_name", "engine")
         self._model_name = vllm_config.model_config.served_model_name
@@ -99,59 +56,78 @@ class AgnosticMetricsLogger(StatLoggerBase, ABC):
         # Define a minimal, useful set of metrics in an agnostic way.
         self._init_metrics()
 
+    # Instrument creation/binding to be implemented by subclasses
     @abstractmethod
-    def _build_provider(self, vllm_config: VllmConfig) -> MetricsProvider:
-        ...
+    def _create_counter(self, name: str, description: str,
+                        labelnames: Iterable[str]) -> Any: ...
+
+    @abstractmethod
+    def _create_gauge(self, name: str, description: str,
+                      labelnames: Iterable[str]) -> Any: ...
+
+    @abstractmethod
+    def _create_histogram(self, name: str, description: str,
+                          labelnames: Iterable[str],
+                          buckets: Optional[Iterable[float]] = None) -> Any: ...
+
+    @abstractmethod
+    def _bind_counter(self, metric: Any,
+                      labels: Dict[str, str]) -> _CounterHandle: ...
+
+    @abstractmethod
+    def _bind_gauge(self, metric: Any,
+                    labels: Dict[str, str]) -> _GaugeHandle: ...
+
+    @abstractmethod
+    def _bind_histogram(self, metric: Any,
+                        labels: Dict[str, str]) -> _HistogramHandle: ...
 
     def _bind_per_engine_counter(self, metric: Any
                                  ) -> dict[int, _CounterHandle]:
         handles: dict[int, _CounterHandle] = {}
         for idx in self.engine_indexes:
-            handles[idx] = self._provider.bind_labels_counter(
-                metric, {
-                    "model_name": self._model_name,
-                    "engine": str(idx),
-                })
+            handles[idx] = self._bind_counter(metric, {
+                "model_name": self._model_name,
+                "engine": str(idx),
+            })
         return handles
 
     def _bind_per_engine_gauge(self, metric: Any) -> dict[int, _GaugeHandle]:
         handles: dict[int, _GaugeHandle] = {}
         for idx in self.engine_indexes:
-            handles[idx] = self._provider.bind_labels_gauge(
-                metric, {
-                    "model_name": self._model_name,
-                    "engine": str(idx),
-                })
+            handles[idx] = self._bind_gauge(metric, {
+                "model_name": self._model_name,
+                "engine": str(idx),
+            })
         return handles
 
     def _bind_per_engine_hist(self, metric: Any
                                ) -> dict[int, _HistogramHandle]:
         handles: dict[int, _HistogramHandle] = {}
         for idx in self.engine_indexes:
-            handles[idx] = self._provider.bind_labels_histogram(
-                metric, {
-                    "model_name": self._model_name,
-                    "engine": str(idx),
-                })
+            handles[idx] = self._bind_histogram(metric, {
+                "model_name": self._model_name,
+                "engine": str(idx),
+            })
         return handles
 
     def _init_metrics(self) -> None:
         # Gauges
-        g_running = self._provider.create_gauge(
+        g_running = self._create_gauge(
             name="vllm:num_requests_running",
             description="Number of requests in execution batches.",
             labelnames=self._labelnames,
         )
         self.gauge_running = self._bind_per_engine_gauge(g_running)
 
-        g_waiting = self._provider.create_gauge(
+        g_waiting = self._create_gauge(
             name="vllm:num_requests_waiting",
             description="Number of requests waiting to be processed.",
             labelnames=self._labelnames,
         )
         self.gauge_waiting = self._bind_per_engine_gauge(g_waiting)
 
-        g_kv = self._provider.create_gauge(
+        g_kv = self._create_gauge(
             name="vllm:kv_cache_usage_perc",
             description="KV-cache usage. 1 means 100 percent usage.",
             labelnames=self._labelnames,
@@ -159,21 +135,21 @@ class AgnosticMetricsLogger(StatLoggerBase, ABC):
         self.gauge_kv_cache = self._bind_per_engine_gauge(g_kv)
 
         # Counters
-        c_preempt = self._provider.create_counter(
+        c_preempt = self._create_counter(
             name="vllm:num_preemptions",
             description="Cumulative number of preemptions from the engine.",
             labelnames=self._labelnames,
         )
         self.counter_preempt = self._bind_per_engine_counter(c_preempt)
 
-        c_prompt = self._provider.create_counter(
+        c_prompt = self._create_counter(
             name="vllm:prompt_tokens",
             description="Number of prefill tokens processed.",
             labelnames=self._labelnames,
         )
         self.counter_prompt = self._bind_per_engine_counter(c_prompt)
 
-        c_gen = self._provider.create_counter(
+        c_gen = self._create_counter(
             name="vllm:generation_tokens",
             description="Number of generation tokens processed.",
             labelnames=self._labelnames,
@@ -181,21 +157,21 @@ class AgnosticMetricsLogger(StatLoggerBase, ABC):
         self.counter_gen = self._bind_per_engine_counter(c_gen)
 
         # Histograms (no custom buckets for simplicity)
-        h_ttft = self._provider.create_histogram(
+        h_ttft = self._create_histogram(
             name="vllm:time_to_first_token_seconds",
             description="Time to first token per request (seconds).",
             labelnames=self._labelnames,
         )
         self.hist_ttft = self._bind_per_engine_hist(h_ttft)
 
-        h_itl = self._provider.create_histogram(
+        h_itl = self._create_histogram(
             name="vllm:inter_token_latency_seconds",
             description="Inter-token latency during decode (seconds).",
             labelnames=self._labelnames,
         )
         self.hist_itl = self._bind_per_engine_hist(h_itl)
 
-        h_e2e = self._provider.create_histogram(
+        h_e2e = self._create_histogram(
             name="vllm:request_e2e_time_seconds",
             description="End-to-end latency per finished request (seconds).",
             labelnames=self._labelnames,
@@ -268,30 +244,28 @@ class _PromHistogramHandle(_HistogramHandle):
         self._child.observe(value)
 
 
-class _PromMetricsProvider(MetricsProvider):
-    def __init__(self) -> None:
-        # Import locally so the agnostic base has no prometheus references
+class PrometheusAgnosticMetricsLogger(AgnosticMetricsLogger):
+    """Agnostic metrics logger backed by Prometheus instruments."""
+
+    def _create_counter(self, name: str, description: str,
+                        labelnames: Iterable[str]) -> Any:
         import prometheus_client  # type: ignore
+        return prometheus_client.Counter(name=name,
+                                         documentation=description,
+                                         labelnames=list(labelnames))
 
-        self._prom = prometheus_client
+    def _create_gauge(self, name: str, description: str,
+                      labelnames: Iterable[str]) -> Any:
+        import prometheus_client  # type: ignore
+        return prometheus_client.Gauge(name=name,
+                                       documentation=description,
+                                       multiprocess_mode="mostrecent",
+                                       labelnames=list(labelnames))
 
-    def create_counter(self, name: str, description: str,
-                       labelnames: Iterable[str]) -> Any:
-        return self._prom.Counter(name=name,
-                                  documentation=description,
-                                  labelnames=list(labelnames))
-
-    def create_gauge(self, name: str, description: str,
-                     labelnames: Iterable[str]) -> Any:
-        # Use mostrecent to keep last written value for multiprocess setups
-        return self._prom.Gauge(name=name,
-                                documentation=description,
-                                multiprocess_mode="mostrecent",
-                                labelnames=list(labelnames))
-
-    def create_histogram(self, name: str, description: str,
-                         labelnames: Iterable[str],
-                         buckets: Optional[Iterable[float]] = None) -> Any:
+    def _create_histogram(self, name: str, description: str,
+                          labelnames: Iterable[str],
+                          buckets: Optional[Iterable[float]] = None) -> Any:
+        import prometheus_client  # type: ignore
         kwargs: Dict[str, Any] = {
             "name": name,
             "documentation": description,
@@ -299,27 +273,18 @@ class _PromMetricsProvider(MetricsProvider):
         }
         if buckets is not None:
             kwargs["buckets"] = list(buckets)
-        return self._prom.Histogram(**kwargs)
+        return prometheus_client.Histogram(**kwargs)
 
-    def bind_labels_counter(self, metric: Any,
-                            labels: Dict[str, str]) -> _CounterHandle:
+    def _bind_counter(self, metric: Any,
+                      labels: Dict[str, str]) -> _CounterHandle:
         return _PromCounterHandle(metric.labels(**labels))
 
-    def bind_labels_gauge(self, metric: Any,
-                          labels: Dict[str, str]) -> _GaugeHandle:
+    def _bind_gauge(self, metric: Any, labels: Dict[str, str]) -> _GaugeHandle:
         return _PromGaugeHandle(metric.labels(**labels))
 
-    def bind_labels_histogram(self, metric: Any,
-                              labels: Dict[str, str]) -> _HistogramHandle:
+    def _bind_histogram(self, metric: Any,
+                        labels: Dict[str, str]) -> _HistogramHandle:
         return _PromHistogramHandle(metric.labels(**labels))
-
-
-class PrometheusAgnosticMetricsLogger(AgnosticMetricsLogger):
-    """Agnostic metrics logger backed by Prometheus instruments."""
-
-    def _build_provider(self, vllm_config: VllmConfig) -> MetricsProvider:
-        # Defer heavy imports and keep the base provider-agnostic
-        return _PromMetricsProvider()
 
 
 # --- OpenTelemetry implementation ---
@@ -358,69 +323,61 @@ class _OtelHistogramHandle(_HistogramHandle):
         self._histogram.record(float(value), attributes=self._attributes)
 
 
-class _OtelMetricsProvider(MetricsProvider):
-    def __init__(self) -> None:
+class OpenTelemetryAgnosticMetricsLogger(AgnosticMetricsLogger):
+    """Agnostic metrics logger backed by OpenTelemetry instruments."""
+
+    def __init__(self, vllm_config: VllmConfig,
+                 engine_indexes: Optional[list[int]] = None):
+        # Initialize OTel meter (if available)
         try:
             from opentelemetry import metrics  # type: ignore
+            self._meter = metrics.get_meter("vllm")
+            self._otel_available = True
         except Exception as e:  # pragma: no cover - import guard
-            logger.warning(
-                "OpenTelemetry not available; metrics will be no-ops: %s", e)
-            self._metrics = None
-            return
+            logger.warning("OpenTelemetry not available; metrics no-ops: %s",
+                           e)
+            self._meter = None
+            self._otel_available = False
+        super().__init__(vllm_config, engine_indexes)
 
-        self._metrics = metrics
-        self._meter = self._metrics.get_meter("vllm")
-
-    def _noop(self) -> bool:
-        return self._metrics is None
-
-    def create_counter(self, name: str, description: str,
-                       labelnames: Iterable[str]) -> Any:
-        if self._noop():
+    def _create_counter(self, name: str, description: str,
+                        labelnames: Iterable[str]) -> Any:
+        if not self._otel_available:
             return (None, "counter")
         return self._meter.create_counter(name=name, description=description)
 
-    def create_gauge(self, name: str, description: str,
-                     labelnames: Iterable[str]) -> Any:
-        if self._noop():
+    def _create_gauge(self, name: str, description: str,
+                      labelnames: Iterable[str]) -> Any:
+        if not self._otel_available:
             return (None, "gauge")
-        # There is no synchronous Gauge in stable OTel API; emulate with
-        # UpDownCounter and compute deltas on set().
+        # Emulate a gauge using UpDownCounter and deltas in set()
         return self._meter.create_up_down_counter(name=name,
                                                   description=description)
 
-    def create_histogram(self, name: str, description: str,
-                         labelnames: Iterable[str],
-                         buckets: Optional[Iterable[float]] = None) -> Any:
-        if self._noop():
+    def _create_histogram(self, name: str, description: str,
+                          labelnames: Iterable[str],
+                          buckets: Optional[Iterable[float]] = None) -> Any:
+        if not self._otel_available:
             return (None, "histogram")
         return self._meter.create_histogram(name=name,
                                             description=description)
 
-    def bind_labels_counter(self, metric: Any,
-                            labels: Dict[str, str]) -> _CounterHandle:
-        if isinstance(metric, tuple):  # no-op provider
+    def _bind_counter(self, metric: Any,
+                      labels: Dict[str, str]) -> _CounterHandle:
+        if isinstance(metric, tuple):
             return _OtelCounterHandle(_NoopCounter(), labels)
         return _OtelCounterHandle(metric, labels)
 
-    def bind_labels_gauge(self, metric: Any,
-                          labels: Dict[str, str]) -> _GaugeHandle:
-        if isinstance(metric, tuple):  # no-op provider
+    def _bind_gauge(self, metric: Any, labels: Dict[str, str]) -> _GaugeHandle:
+        if isinstance(metric, tuple):
             return _NoopGaugeHandle()
         return _OtelUpDownGaugeHandle(metric, labels)
 
-    def bind_labels_histogram(self, metric: Any,
-                              labels: Dict[str, str]) -> _HistogramHandle:
-        if isinstance(metric, tuple):  # no-op provider
+    def _bind_histogram(self, metric: Any,
+                        labels: Dict[str, str]) -> _HistogramHandle:
+        if isinstance(metric, tuple):
             return _NoopHistogramHandle()
         return _OtelHistogramHandle(metric, labels)
-
-
-class OpenTelemetryAgnosticMetricsLogger(AgnosticMetricsLogger):
-    """Agnostic metrics logger backed by OpenTelemetry instruments."""
-
-    def _build_provider(self, vllm_config: VllmConfig) -> MetricsProvider:
-        return _OtelMetricsProvider()
 
 
 # --- No-op handles (used if OTel is unavailable) ---
