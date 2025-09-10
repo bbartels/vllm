@@ -23,7 +23,7 @@ ARG FLASHINFER_AOT_COMPILE
 
 # If AOT is enabled we use the "base" runtime image; otherwise keep "devel"
 # so JIT mode (and other runtime builds) have nvcc & headers available.
-ARG FINAL_BASE_IMAGE=nvidia/cuda:${CUDA_VERSION}-${FLASHINFER_AOT_COMPILE:+base}${FLASHINFER_AOT_COMPILE:-devel}-ubuntu22.04
+ARG FINAL_BASE_IMAGE=nvidia/cuda:${CUDA_VERSION}-base-ubuntu22.04
 
 # By parameterizing the Deadsnakes repository URL, we allow third-party to use
 # their own mirror. When doing so, we don't benefit from the transparent
