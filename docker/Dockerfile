@@ -259,27 +259,50 @@ RUN if [ "$RUN_WHEEL_CHECK" = "true" ]; then \
 ENV WHEELHOUSE=/opt/wheels
 RUN mkdir -p ${WHEELHOUSE}
 
-# FlashInfer wheel (with optional AOT precompile)
+# Install FlashInfer from source
 ARG FLASHINFER_GIT_REPO="https://github.com/flashinfer-ai/flashinfer.git"
 # Keep this in sync with "flashinfer" extra in setup.py
-ARG FLASHINFER_GIT_REF="v0.3.1"
-RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
-  set -euo pipefail; \
-  . /etc/environment || true; \
-  git clone --depth 1 --recursive --shallow-submodules --branch "${FLASHINFER_GIT_REF}" "${FLASHINFER_GIT_REPO}" flashinfer && \
-  pushd flashinfer; \
-    if [ "${FLASHINFER_AOT_COMPILE:-false}" = "true" ]; then \
-      if [[ "${CUDA_VERSION}" == 11.* ]]; then FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9"; \
-      elif [[ "${CUDA_VERSION}" == 12.[0-7]* ]]; then FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9 9.0a"; \
-      else FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9 9.0a 10.0a 12.0"; fi; \
-      FLASHINFER_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" python3 -m flashinfer.aot; \
-    fi; \
-    python3 -m pip install build; \
-    python3 -m build --wheel --no-isolation; \
-    mv dist/*.whl "${WHEELHOUSE}/"; \
-  popd; \
-  rm -rf flashinfer \
-'
+ARG FLASHINFER_GIT_REF="v0.3.0"
+# Flag to control whether to compile FlashInfer AOT kernels
+# Set to "true" to enable AOT compilation:
+# docker build --build-arg FLASHINFER_AOT_COMPILE=true ...
+ARG FLASHINFER_AOT_COMPILE=false
+RUN --mount=type=cache,target=/root/.cache/uv bash - <<'BASH'
+  . /etc/environment
+    git clone --depth 1 --recursive --shallow-submodules \
+        --branch ${FLASHINFER_GIT_REF} \
+        ${FLASHINFER_GIT_REPO} flashinfer
+    pushd flashinfer
+        if [ "${FLASHINFER_AOT_COMPILE}" = "true" ]; then
+            # Exclude CUDA arches for older versions (11.x and 12.0-12.7)
+            # TODO: Update this to allow setting TORCH_CUDA_ARCH_LIST as a build arg.
+            if [[ "${CUDA_VERSION}" == 11.* ]]; then
+                FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9"
+            elif [[ "${CUDA_VERSION}" == 12.[0-7]* ]]; then
+                FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9 9.0a"
+            else
+                # CUDA 12.8+ supports 10.0a and 12.0
+                FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9 9.0a 10.0a 12.0"
+            fi
+            echo "🏗️  Installing FlashInfer with AOT compilation for arches: ${FI_TORCH_CUDA_ARCH_LIST}"
+            # Build AOT kernels
+            TORCH_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" \
+                python3 -m flashinfer.aot
+            # Install with no-build-isolation since we already built AOT kernels
+            TORCH_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" \
+                uv pip install --system --no-build-isolation . \
+                --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+            # Download pre-compiled cubins
+            TORCH_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" \
+                python3 -m flashinfer --download-cubin || echo "WARNING: Failed to download flashinfer cubins."
+        else
+            echo "🏗️  Installing FlashInfer without AOT compilation in JIT mode"
+            uv pip install --system . \
+                --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+        fi
+    popd
+    rm -rf flashinfer
+BASH
 
 # DeepGEMM wheel
 ARG DEEPGEMM_GIT_REF
