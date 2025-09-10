@@ -272,7 +272,7 @@ RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
       if [[ "${CUDA_VERSION}" == 11.* ]]; then FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9"; \
       elif [[ "${CUDA_VERSION}" == 12.[0-7]* ]]; then FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9 9.0a"; \
       else FI_TORCH_CUDA_ARCH_LIST="7.5 8.0 8.9 9.0a 10.0a 12.0"; fi; \
-      TORCH_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" python3 -m flashinfer.aot; \
+      FLASHINFER_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" python3 -m flashinfer.aot; \
     fi; \
     python3 -m pip install build; \
     python3 -m build --wheel --no-isolation; \
