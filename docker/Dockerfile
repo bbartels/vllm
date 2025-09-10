@@ -93,7 +93,7 @@ ENV PATH="/usr/lib/ccache:${PATH}"
 RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
     && echo 'tzdata tzdata/Zones/America select Los_Angeles' | debconf-set-selections \
     && apt-get update -y \
-    && apt-get install -y ccache software-properties-common git curl sudo \
+    && apt-get install -y ccache software-properties-common git curl wget sudo \
     && if [ ! -z ${DEADSNAKES_MIRROR_URL} ] ; then \
         if [ ! -z "${DEADSNAKES_GPGKEY_URL}" ] ; then \
             mkdir -p -m 0755 /etc/apt/keyrings ; \
@@ -265,6 +265,30 @@ RUN if [ "$RUN_WHEEL_CHECK" = "true" ]; then \
 ENV WHEELHOUSE=/opt/wheels
 RUN mkdir -p ${WHEELHOUSE}
 
+# Install DeepGEMM from source
+ARG DEEPGEMM_GIT_REF
+COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
+RUN --mount=type=cache,target=/root/.cache/uv \
+    VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" --stage build ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} 
+
+# Install EP kernels(pplx-kernels and DeepEP), NixL
+COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
+COPY tools/install_nixl.sh install_nixl.sh
+ENV CUDA_HOME=/usr/local/cuda
+RUN export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0a+PTX}" \
+    && bash install_python_libraries.sh \
+    && bash install_nixl.sh --force
+# Package pplx-kernels and DeepEP as wheels so we can install them in the final image
+ENV WHEELHOUSE=/opt/wheels
+RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
+  set -euo pipefail; \
+  WORKSPACE="${PWD}/ep_kernels_workspace"; \
+  if [ -d "$WORKSPACE/pplx-kernels" ]; then \
+    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/pplx-kernels"; \
+  fi; \
+  if [ -d "$WORKSPACE/DeepEP" ]; then \
+    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/DeepEP"; \
+  fi'
 # Install FlashInfer from source
 ARG FLASHINFER_GIT_REPO="https://github.com/flashinfer-ai/flashinfer.git"
 # Keep this in sync with "flashinfer" extra in setup.py
@@ -310,32 +334,6 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     popd
     rm -rf flashinfer
 BASH
-
-# Install DeepGEMM from source
-ARG DEEPGEMM_GIT_REF
-COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
-RUN --mount=type=cache,target=/root/.cache/uv \
-    VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" --stage build ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} 
-
-# Install EP kernels(pplx-kernels and DeepEP), NixL
-COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
-COPY tools/install_nixl.sh install_nixl.sh
-ENV CUDA_HOME=/usr/local/cuda
-RUN export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0a+PTX}" \
-    && bash install_python_libraries.sh \
-    && bash install_nixl.sh --force
-
-# Package pplx-kernels and DeepEP as wheels so we can install them in the final image
-ENV WHEELHOUSE=/opt/wheels
-RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
-  set -euo pipefail; \
-  WORKSPACE="${PWD}/ep_kernels_workspace"; \
-  if [ -d "$WORKSPACE/pplx-kernels" ]; then \
-    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/pplx-kernels"; \
-  fi; \
-  if [ -d "$WORKSPACE/DeepEP" ]; then \
-    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/DeepEP"; \
-  fi'
 
 #################### DEV IMAGE ####################
 FROM base AS dev
