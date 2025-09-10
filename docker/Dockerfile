@@ -1,4 +1,4 @@
-# The vLLM Dockerfile is used to construct vLLM image that can be directly used
+2# The vLLM Dockerfile is used to construct vLLM image that can be directly used
 # to run the OpenAI compatible server.
 
 # Please update any changes made here to
@@ -14,7 +14,7 @@ ARG PYTHON_VERSION=3.12
 #
 # Example:
 # docker build --build-arg BUILD_BASE_IMAGE=registry.acme.org/mirror/nvidia/cuda:${CUDA_VERSION}-devel-ubuntu20.04
-ARG BUILD_BASE_IMAGE=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu20.04
+ARG BUILD_BASE_IMAGE=nvidia/cuda:${CUDA_VERSION}-devel-ubuntu22.04
 
 # Flag to control whether to compile FlashInfer AOT kernels
 # Set to "true" to enable AOT compilation:
@@ -85,9 +85,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG DEADSNAKES_MIRROR_URL
 ARG DEADSNAKES_GPGKEY_URL
 ARG GET_PIP_URL
-ENV CMAKE_C_COMPILER_LAUNCHER=ccache \
-    CMAKE_CXX_COMPILER_LAUNCHER=ccache
-ENV PATH="/usr/lib/ccache:${PATH}"
 
 # Install Python and other dependencies
 RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
@@ -172,9 +169,6 @@ ARG FLASHINFER_AOT_COMPILE
 ARG PIP_INDEX_URL UV_INDEX_URL
 ARG PIP_EXTRA_INDEX_URL UV_EXTRA_INDEX_URL
 ARG PYTORCH_CUDA_INDEX_BASE_URL
-ENV CMAKE_C_COMPILER_LAUNCHER=ccache \
-    CMAKE_CXX_COMPILER_LAUNCHER=ccache
-ENV PATH="/usr/lib/ccache:${PATH}"
 
 # install build dependencies
 COPY requirements/build.txt requirements/build.txt
