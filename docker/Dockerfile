@@ -273,7 +273,7 @@ ARG FLASHINFER_GIT_REF="v0.3.0"
 # Set to "true" to enable AOT compilation:
 # docker build --build-arg FLASHINFER_AOT_COMPILE=true ...
 ARG FLASHINFER_AOT_COMPILE=false
-RUN --mount=type=cache,target=/root/.cache/uv bash
+RUN --mount=type=cache,target=/root/.cache/uv bash \
     --mount=type=cache,target=/root/.cache/ccache- <<'BASH'
   . /etc/environment
     git clone --depth 1 --recursive --shallow-submodules \
