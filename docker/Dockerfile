@@ -318,6 +318,18 @@ RUN export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0a+PTX}" \
     && bash install_python_libraries.sh \
     && bash install_nixl.sh --force
 
+# Package pplx-kernels and DeepEP as wheels so we can install them in the final image
+ENV WHEELHOUSE=/opt/wheels
+RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
+  set -euo pipefail; \
+  WORKSPACE="${PWD}/ep_kernels_workspace"; \
+  if [ -d "$WORKSPACE/pplx-kernels" ]; then \
+    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/pplx-kernels"; \
+  fi; \
+  if [ -d "$WORKSPACE/DeepEP" ]; then \
+    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/DeepEP"; \
+  fi'
+
 #################### DEV IMAGE ####################
 FROM base AS dev
 
@@ -432,6 +444,29 @@ COPY --from=build /opt/wheels /opt/wheels
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system /vllm-workspace/dist/*.whl /opt/wheels/*.whl --verbose \
         --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+
+# ---- Bring native runtime artifacts built in `build` into the final image ----
+# NVSHMEM (built under the default ep_kernels workspace in the build stage)
+#   install_python_libraries.sh puts it in: /workspace/ep_kernels_workspace/nvshmem_install
+COPY --from=build /workspace/ep_kernels_workspace/nvshmem_install /usr/local/nvshmem
+
+# GDRCopy / UCX / NIXL installed by install_nixl.sh into /usr/local/{gdrcopy,ucx,nixl}
+COPY --from=build /usr/local/gdrcopy /usr/local/gdrcopy
+COPY --from=build /usr/local/ucx     /usr/local/ucx
+COPY --from=build /usr/local/nixl    /usr/local/nixl
+
+# Make the tools and libs discoverable at runtime
+ENV NVSHMEM_HOME=/usr/local/nvshmem \
+    GDR_HOME=/usr/local/gdrcopy \
+    UCX_HOME=/usr/local/ucx \
+    NIXL_HOME=/usr/local/nixl
+
+# Add both arch-specific NIXL lib paths so this works on x86_64 and arm64
+ENV PATH="$NIXL_HOME/bin:$UCX_HOME/bin:$GDR_HOME/bin:$PATH"
+ENV LD_LIBRARY_PATH="/usr/local/nvshmem/lib:$GDR_HOME/lib:$UCX_HOME/lib:$NIXL_HOME/lib/x86_64-linux-gnu:$NIXL_HOME/lib/aarch64-linux-gnu:$LD_LIBRARY_PATH"
+
+# Refresh loader cache (safe even if ld.so.conf.d has no entries for these paths)
+RUN ldconfig || true
 
 COPY examples examples
 COPY benchmarks benchmarks
