@@ -179,6 +179,8 @@ ENV UV_HTTP_TIMEOUT=500
 ENV UV_INDEX_STRATEGY="unsafe-best-match"
 # Use copy mode to avoid hardlink failures with Docker cache mounts
 ENV UV_LINK_MODE=copy
+ENV NINJA_FLAGS="--verbose -d keeprsp"
+ENV CMAKE_VERBOSE_MAKEFILE=ON
 
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r requirements/build.txt \
@@ -363,6 +365,7 @@ ARG FLASHINFER_AOT_COMPILE
 WORKDIR /vllm-workspace
 ENV DEBIAN_FRONTEND=noninteractive
 ARG TARGETPLATFORM
+
 
 SHELL ["/bin/bash", "-c"]
 
