@@ -304,30 +304,19 @@ RUN --mount=type=cache,target=/root/.cache/uv bash - <<'BASH'
     rm -rf flashinfer
 BASH
 
-# DeepGEMM wheel
+# Install DeepGEMM from source
 ARG DEEPGEMM_GIT_REF
 COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
-RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
-  set -euo pipefail; \
-  export VLLM_DOCKER_BUILD_CONTEXT=1; \
-  if /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" ${DEEPGEMM_GIT_REF:+--ref "${DEEPGEMM_GIT_REF}"} --stage build; then \
-    echo "DeepGEMM wheel built into ${WHEELHOUSE}"; \
-  else \
-    echo "Falling back to sdist->wheel for DeepGEMM"; \
-    git clone ${DEEPGEMM_GIT_REF:+--branch "${DEEPGEMM_GIT_REF}"} --depth 1 https://github.com/coverlab/DeepGEMM.git deepgemm && \
-    pushd deepgemm && python3 -m pip install build && python3 -m build --wheel --no-isolation && mv dist/*.whl "${WHEELHOUSE}/" && popd && rm -rf deepgemm; \
-  fi \
-'
+RUN --mount=type=cache,target=/root/.cache/uv \
+    VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" --stage build ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} 
 
-# EP kernels (pplx-kernels & DeepEP) and NixL wheels (best-effort)
-COPY tools/ep_kernels/install_python_libraries.sh /tmp/install_python_libraries.sh
-COPY tools/install_nixl.sh /tmp/install_nixl.sh
-RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
-  set -euo pipefail; \
-  python3 -m pip install wheel; \
-  BUILD_WHEELHOUSE="${WHEELHOUSE}" bash /tmp/install_python_libraries.sh || true; \
-  BUILD_WHEELHOUSE="${WHEELHOUSE}" bash /tmp/install_nixl.sh --force || true; \
-'
+# Install EP kernels(pplx-kernels and DeepEP), NixL
+COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
+COPY tools/install_nixl.sh install_nixl.sh
+ENV CUDA_HOME=/usr/local/cuda
+RUN export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0a+PTX}" \
+    && bash install_python_libraries.sh \
+    && bash install_nixl.sh --force
 
 #################### DEV IMAGE ####################
 FROM base AS dev
