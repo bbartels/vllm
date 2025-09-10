@@ -310,7 +310,7 @@ COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
 RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
   set -euo pipefail; \
   export VLLM_DOCKER_BUILD_CONTEXT=1; \
-  if /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" ${DEEPGEMM_GIT_REF:+--ref "${DEEPGEMM_GIT_REF}"} --build-wheel "${WHEELHOUSE}"; then \
+  if /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" ${DEEPGEMM_GIT_REF:+--ref "${DEEPGEMM_GIT_REF}"} --stage build; then \
     echo "DeepGEMM wheel built into ${WHEELHOUSE}"; \
   else \
     echo "Falling back to sdist->wheel for DeepGEMM"; \
