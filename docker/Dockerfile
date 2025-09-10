@@ -274,7 +274,7 @@ ARG FLASHINFER_GIT_REF="v0.3.0"
 # docker build --build-arg FLASHINFER_AOT_COMPILE=true ...
 ARG FLASHINFER_AOT_COMPILE=false
 RUN --mount=type=cache,target=/root/.cache/uv bash \
-    --mount=type=cache,target=/root/.cache/ccache- <<'BASH'
+    --mount=type=cache,target=/root/.cache/ccache - <<'BASH'
   . /etc/environment
     git clone --depth 1 --recursive --shallow-submodules \
         --branch ${FLASHINFER_GIT_REF} \
