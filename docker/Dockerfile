@@ -90,7 +90,7 @@ ARG GET_PIP_URL
 RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
     && echo 'tzdata tzdata/Zones/America select Los_Angeles' | debconf-set-selections \
     && apt-get update -y \
-    && apt-get install -y ccache software-properties-common git curl wget sudo ffmpeg libsm6 libxext6 libgl1 \
+    && apt-get install -y ccache software-properties-common git curl wget sudo libibverbs-dev  \
     && if [ ! -z ${DEADSNAKES_MIRROR_URL} ] ; then \
         if [ ! -z "${DEADSNAKES_GPGKEY_URL}" ] ; then \
             mkdir -p -m 0755 /etc/apt/keyrings ; \
