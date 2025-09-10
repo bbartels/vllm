@@ -85,6 +85,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ARG DEADSNAKES_MIRROR_URL
 ARG DEADSNAKES_GPGKEY_URL
 ARG GET_PIP_URL
+ENV CMAKE_C_COMPILER_LAUNCHER=ccache \
+    CMAKE_CXX_COMPILER_LAUNCHER=ccache
+ENV PATH="/usr/lib/ccache:${PATH}"
 
 # Install Python and other dependencies
 RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
@@ -169,6 +172,9 @@ ARG FLASHINFER_AOT_COMPILE
 ARG PIP_INDEX_URL UV_INDEX_URL
 ARG PIP_EXTRA_INDEX_URL UV_EXTRA_INDEX_URL
 ARG PYTORCH_CUDA_INDEX_BASE_URL
+ENV CMAKE_C_COMPILER_LAUNCHER=ccache \
+    CMAKE_CXX_COMPILER_LAUNCHER=ccache
+ENV PATH="/usr/lib/ccache:${PATH}"
 
 # install build dependencies
 COPY requirements/build.txt requirements/build.txt
