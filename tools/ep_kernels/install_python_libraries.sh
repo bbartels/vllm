@@ -1,14 +1,41 @@
 set -ex
+WORKSPACE=""   # optional
+JOBS=1         # default
 
-# prepare workspace directory
-WORKSPACE=$1
-if [ -z "$WORKSPACE" ]; then
-    export WORKSPACE=$(pwd)/ep_kernels_workspace
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --jobs)
+      if [[ -n "${2-}" && "$2" =~ ^[0-9]+$ ]]; then
+        JOBS=$2
+        shift 2
+      else
+        echo "Error: --jobs requires a numeric argument"
+        exit 1
+      fi
+      ;;
+    --*) # unknown option
+      echo "Unknown option $1"
+      exit 1
+      ;;
+    *)  # anything that's not an option must be workspace
+      if [[ -z "$WORKSPACE" ]]; then
+        WORKSPACE="$1"
+        shift
+      else
+        echo "Error: multiple workspaces specified: $WORKSPACE and $1"
+        exit 1
+      fi
+      ;;
+  esac
+done
+
+# fallback if not provided
+if [[ -z "$WORKSPACE" ]]; then
+  WORKSPACE="$(pwd)/ep_kernels_workspace"
 fi
 
-if [ ! -d "$WORKSPACE" ]; then
-    mkdir -p $WORKSPACE
-fi
+echo "Using workspace: $WORKSPACE"
+echo "Using jobs: $JOBS"
 
 # install dependencies if not installed
 pip3 install cmake torch ninja
@@ -53,7 +80,7 @@ export NVSHMEM_BUILD_TXZ_PACKAGE=0
 export NVSHMEM_TIMEOUT_DEVICE_POLLING=0
 
 cmake -G Ninja -S . -B $WORKSPACE/nvshmem_build/ -DCMAKE_INSTALL_PREFIX=$WORKSPACE/nvshmem_install
-cmake --build $WORKSPACE/nvshmem_build/ --target install
+cmake --build $WORKSPACE/nvshmem_build/ --target install -j"$JOBS"
 
 popd
 

@@ -204,6 +204,7 @@ ARG SCCACHE_ENDPOINT
 ARG SCCACHE_BUCKET_NAME=vllm-build-sccache
 ARG SCCACHE_REGION_NAME=us-west-2
 ARG SCCACHE_S3_NO_CREDENTIALS=0
+ARG SCCACHE_S3_Creds=""
 
 # Flag to control whether to use pre-built vLLM wheels
 ARG VLLM_USE_PRECOMPILED=""
@@ -221,6 +222,9 @@ RUN --mount=type=cache,target=/root/.cache/uv \
         && export SCCACHE_BUCKET=${SCCACHE_BUCKET_NAME} \
         && export SCCACHE_REGION=${SCCACHE_REGION_NAME} \
         && export SCCACHE_S3_NO_CREDENTIALS=${SCCACHE_S3_NO_CREDENTIALS} \
+	&& export AWS_ACCESS_KEY_ID=minio \
+	&& export AWS_SECRET_ACCESS_KEY=minio123 \
+	&& export SCCACHE_S3_USE_SSL=0 \
         && export SCCACHE_IDLE_TIMEOUT=0 \
         && export CMAKE_BUILD_TYPE=Release \
         && export VLLM_USE_PRECOMPILED="${VLLM_USE_PRECOMPILED}" \
@@ -272,8 +276,8 @@ COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
 COPY tools/install_nixl.sh install_nixl.sh
 ENV CUDA_HOME=/usr/local/cuda
 RUN export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0a+PTX}" \
-    && bash install_python_libraries.sh \
-    && bash install_nixl.sh --force
+    && bash install_python_libraries.sh --jobs ${MAX_JOBS} \
+    && bash install_nixl.sh --force --jobs ${MAX_JOBS}
 # Package pplx-kernels and DeepEP as wheels so we can install them in the final image
 ENV WHEELHOUSE=/opt/wheels
 RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
