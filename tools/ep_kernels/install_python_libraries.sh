@@ -34,6 +34,10 @@ if [[ -z "$WORKSPACE" ]]; then
   WORKSPACE="$(pwd)/ep_kernels_workspace"
 fi
 
+if [ ! -d "$WORKSPACE" ]; then
+    mkdir -p $WORKSPACE
+fi
+
 echo "Using workspace: $WORKSPACE"
 echo "Using jobs: $JOBS"
 
@@ -80,7 +84,7 @@ export NVSHMEM_BUILD_TXZ_PACKAGE=0
 export NVSHMEM_TIMEOUT_DEVICE_POLLING=0
 
 cmake -G Ninja -S . -B $WORKSPACE/nvshmem_build/ -DCMAKE_INSTALL_PREFIX=$WORKSPACE/nvshmem_install
-cmake --build $WORKSPACE/nvshmem_build/ --target install -j"$JOBS"
+cmake --build $WORKSPACE/nvshmem_build/ -j"$JOBS" --target install
 
 popd
 

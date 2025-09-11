@@ -127,7 +127,7 @@ class cmake_build_ext(build_ext):
                     nvcc_threads)
             else:
                 nvcc_threads = 1
-            num_jobs = max(1, num_jobs // nvcc_threads)
+            num_jobs = max(1, num_jobs)
 
         return num_jobs, nvcc_threads
 
