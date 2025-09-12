@@ -90,7 +90,7 @@ ARG GET_PIP_URL
 RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
     && echo 'tzdata tzdata/Zones/America select Los_Angeles' | debconf-set-selections \
     && apt-get update -y \
-    && apt-get install -y ccache software-properties-common git curl wget sudo libibverbs-dev  \
+    && apt-get install -y ccache software-properties-common git curl wget sudo libibverbs-dev \
     && if [ ! -z ${DEADSNAKES_MIRROR_URL} ] ; then \
         if [ ! -z "${DEADSNAKES_GPGKEY_URL}" ] ; then \
             mkdir -p -m 0755 /etc/apt/keyrings ; \
@@ -186,7 +186,15 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r requirements/build.txt \
     --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
 
-COPY . .
+COPY setup.py setup.py
+COPY pyproject.toml pyproject.toml
+COPY cmake/ cmake/
+COPY csrc/ csrc/
+COPY requirements/ requirements
+COPY vllm/ vllm/
+COPY CMakeLists.txt CMakeLists.txt
+
+COPY tools/check_repo.sh tools/check_repo.sh
 ARG GIT_REPO_CHECK=0
 RUN --mount=type=bind,source=.git,target=.git \
     if [ "$GIT_REPO_CHECK" != "0" ]; then bash tools/check_repo.sh ; fi
@@ -198,40 +206,47 @@ ENV MAX_JOBS=${max_jobs}
 ARG nvcc_threads=8
 ENV NVCC_THREADS=$nvcc_threads
 
+ARG SCCACHE_VERSION=0.8.1
+ARG SCCACHE_DOWNLOAD_URL=https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz
+
 ARG USE_SCCACHE
-ARG SCCACHE_DOWNLOAD_URL=https://github.com/mozilla/sccache/releases/download/v0.8.1/sccache-v0.8.1-x86_64-unknown-linux-musl.tar.gz
+
+RUN if [ "$USE_SCCACHE" = "1" ]; then \
+        echo "Installing sccache..." \
+        && curl -sSL -o /tmp/sccache.tar.gz ${SCCACHE_DOWNLOAD_URL} \
+        && tar -xzf /tmp/sccache.tar.gz -C /tmp \
+        && mv /tmp/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache /usr/local/bin/sccache \
+        && rm -rf /tmp/sccache* ; \
+    fi
+
 ARG SCCACHE_ENDPOINT
 ARG SCCACHE_BUCKET_NAME=vllm-build-sccache
 ARG SCCACHE_REGION_NAME=us-west-2
 ARG SCCACHE_S3_NO_CREDENTIALS=0
-ARG SCCACHE_S3_Creds=""
+ARG SCCACHE_S3_USE_SSL=1
+ARG SCCACHE_IDLE_TIMEOUT=0
+
+ENV \
+    SCCACHE_BUCKET=${SCCACHE_BUCKET_NAME} \
+    SCCACHE_REGION=${SCCACHE_REGION_NAME} \
+    SCCACHE_S3_NO_CREDENTIALS=${SCCACHE_S3_NO_CREDENTIALS} \
+    SCCACHE_S3_USE_SSL=${SCCACHE_S3_USE_SSL} \
+    SCCACHE_IDLE_TIMEOUT=${SCCACHE_IDLE_TIMEOUT}
 
 # Flag to control whether to use pre-built vLLM wheels
 ARG VLLM_USE_PRECOMPILED=""
 
-# if USE_SCCACHE is set, use sccache to speed up compilation
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=bind,source=.git,target=.git \
     if [ "$USE_SCCACHE" = "1" ]; then \
-        echo "Installing sccache..." \
-        && curl -L -o sccache.tar.gz ${SCCACHE_DOWNLOAD_URL} \
-        && tar -xzf sccache.tar.gz \
-        && sudo mv sccache-v0.8.1-x86_64-unknown-linux-musl/sccache /usr/bin/sccache \
-        && rm -rf sccache.tar.gz sccache-v0.8.1-x86_64-unknown-linux-musl \
-        && if [ ! -z ${SCCACHE_ENDPOINT} ] ; then export SCCACHE_ENDPOINT=${SCCACHE_ENDPOINT} ; fi \
-        && export SCCACHE_BUCKET=${SCCACHE_BUCKET_NAME} \
-        && export SCCACHE_REGION=${SCCACHE_REGION_NAME} \
-        && export SCCACHE_S3_NO_CREDENTIALS=${SCCACHE_S3_NO_CREDENTIALS} \
-	&& export AWS_ACCESS_KEY_ID=minio \
-	&& export AWS_SECRET_ACCESS_KEY=minio123 \
-	&& export SCCACHE_S3_USE_SSL=0 \
-        && export SCCACHE_IDLE_TIMEOUT=0 \
-        && export CMAKE_BUILD_TYPE=Release \
-        && export VLLM_USE_PRECOMPILED="${VLLM_USE_PRECOMPILED}" \
-        && export VLLM_DOCKER_BUILD_CONTEXT=1 \
-        && sccache --show-stats \
-        && python3 setup.py bdist_wheel --dist-dir=dist --py-limited-api=cp38 \
-        && sccache --show-stats; \
+        sccache --show-stats; \
+    fi \
+    && export CMAKE_BUILD_TYPE=Release \
+    && export VLLM_USE_PRECOMPILED="${VLLM_USE_PRECOMPILED}" \
+    && export VLLM_DOCKER_BUILD_CONTEXT=1 \
+    && python3 setup.py bdist_wheel --dist-dir=dist --py-limited-api=cp38 \
+    && if [ "$USE_SCCACHE" = "1" ]; then \
+        sccache --show-stats; \
     fi
 
 ARG vllm_target_device="cuda"
@@ -261,34 +276,8 @@ RUN if [ "$RUN_WHEEL_CHECK" = "true" ]; then \
         echo "Skipping wheel size check."; \
     fi
 
-# ===== Build third-party CUDA wheels in build stage =====
-ENV WHEELHOUSE=/opt/wheels
-RUN mkdir -p ${WHEELHOUSE}
+ENV TORCH_CUDA_ARCH_LIST=
 
-# Install DeepGEMM from source
-ARG DEEPGEMM_GIT_REF
-COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
-RUN --mount=type=cache,target=/root/.cache/uv \
-    VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" --stage build ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} 
-
-# Install EP kernels(pplx-kernels and DeepEP), NixL
-COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
-COPY tools/install_nixl.sh install_nixl.sh
-ENV CUDA_HOME=/usr/local/cuda
-RUN export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0a+PTX}" \
-    && bash install_python_libraries.sh --jobs ${MAX_JOBS} \
-    && bash install_nixl.sh --force --jobs ${MAX_JOBS}
-# Package pplx-kernels and DeepEP as wheels so we can install them in the final image
-ENV WHEELHOUSE=/opt/wheels
-RUN --mount=type=cache,target=/root/.cache/uv bash -lc '\
-  set -euo pipefail; \
-  WORKSPACE="${PWD}/ep_kernels_workspace"; \
-  if [ -d "$WORKSPACE/pplx-kernels" ]; then \
-    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/pplx-kernels"; \
-  fi; \
-  if [ -d "$WORKSPACE/DeepEP" ]; then \
-    python3 -m pip wheel -w "$WHEELHOUSE" "$WORKSPACE/DeepEP"; \
-  fi'
 # Install FlashInfer from source
 ARG FLASHINFER_GIT_REPO="https://github.com/flashinfer-ai/flashinfer.git"
 # Keep this in sync with "flashinfer" extra in setup.py
@@ -297,6 +286,19 @@ ARG FLASHINFER_GIT_REF="v0.3.1"
 # Set to "true" to enable AOT compilation:
 # docker build --build-arg FLASHINFER_AOT_COMPILE=true ...
 ARG FLASHINFER_AOT_COMPILE=false
+RUN if [ "${USE_SCCACHE}" = "1" ]; then \
+        echo "🔧 Enabling sccache for compilation" && \
+        export CC="sccache gcc" && \
+    export CXX="sccache g++" \
+    export CUDAHOSTCXX="sccache g++" && \
+    export NVCC="sccache nvcc" && \
+    export CMAKE_C_COMPILER_LAUNCHER=sccache && \
+    export CMAKE_CXX_COMPILER_LAUNCHER=sccache && \
+    sccache --show-stats || true \
+  else \
+    echo "🔧 Building without sccache"; \
+  fi
+
 RUN --mount=type=cache,target=/root/.cache/uv \
     --mount=type=cache,target=/root/.cache/ccache bash - <<'BASH'
   . /etc/environment
@@ -318,6 +320,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
             echo "🏗️  Installing FlashInfer with AOT compilation for arches: ${FI_TORCH_CUDA_ARCH_LIST}"
             # Build AOT kernels
             TORCH_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" \
+		python3 -c "import site; print(site.getsitepackages())" \
                 python3 -m flashinfer.aot
             # Install with no-build-isolation since we already built AOT kernels
             TORCH_CUDA_ARCH_LIST="${FI_TORCH_CUDA_ARCH_LIST}" \
@@ -334,6 +337,25 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     popd
     rm -rf flashinfer
 BASH
+
+# Install DeepGEMM from source
+ARG DEEPGEMM_GIT_REF
+COPY tools/install_deepgemm.sh /tmp/install_deepgemm.sh
+RUN --mount=type=cache,target=/root/.cache/uv \
+    VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" --stage build ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} 
+
+
+RUN apt-get install -y pciutils
+# Install EP kernels(pplx-kernels and DeepEP), NixL
+COPY tools/install_nixl.sh install_nixl.sh
+RUN bash install_nixl.sh --force --jobs ${MAX_JOBS}
+COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
+ENV CUDA_HOME=/usr/local/cuda
+RUN --mount=type=cache,target=/root/.cache/uv \
+    export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0a+PTX}" \
+    && bash install_python_libraries.sh --jobs ${MAX_JOBS}
+
+#################### WHEEL BUILD IMAGE ####################
 
 #################### DEV IMAGE ####################
 FROM base AS dev
@@ -451,10 +473,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system /vllm-workspace/dist/*.whl /opt/wheels/*.whl --verbose \
         --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
 
-# ---- Bring native runtime artifacts built in `build` into the final image ----
-# NVSHMEM (built under the default ep_kernels workspace in the build stage)
-#   install_python_libraries.sh puts it in: /workspace/ep_kernels_workspace/nvshmem_install
-COPY --from=build /workspace/ep_kernels_workspace/nvshmem_install /usr/local/nvshmem
+COPY --from=build /workspace/ep_kernels_workspace/wheels /vllm-workspace/ep_kernels_workspace/wheels
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv pip install --system /vllm-workspace/ep_kernels_workspace/*.whl --verbose \
+        --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+
 
 # GDRCopy / UCX / NIXL installed by install_nixl.sh into /usr/local/{gdrcopy,ucx,nixl}
 COPY --from=build /usr/local/gdrcopy /usr/local/gdrcopy
@@ -473,6 +496,9 @@ ENV LD_LIBRARY_PATH="/usr/local/nvshmem/lib:$GDR_HOME/lib:$UCX_HOME/lib:$NIXL_HO
 
 # Refresh loader cache (safe even if ld.so.conf.d has no entries for these paths)
 RUN ldconfig || true
+
+
+
 
 COPY examples examples
 COPY benchmarks benchmarks

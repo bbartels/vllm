@@ -29,6 +29,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+
 # fallback if not provided
 if [[ -z "$WORKSPACE" ]]; then
   WORKSPACE="$(pwd)/ep_kernels_workspace"
@@ -41,8 +42,22 @@ fi
 echo "Using workspace: $WORKSPACE"
 echo "Using jobs: $JOBS"
 
-# install dependencies if not installed
-pip3 install cmake torch ninja
+export CMAKE_C_COMPILER_LAUNCHER=sccache
+export CMAKE_CXX_COMPILER_LAUNCHER=sccache
+export CMAKE_C_COMPILER_LAUNCHER=sccache
+export CMAKE_CXX_COMPILER_LAUNCHER=sccache
+export CMAKE_CUDA_COMPILER_LAUNCHER=sccache
+sccache --show-stats || true
+
+# List of dependencies
+pkgs="cmake torch ninja"
+
+if command -v uv &> /dev/null; then
+    echo "Using uv for installation..."
+    uv pip install --system $pkgs
+else
+    pip3 install $pkgs
+fi
 
 # build nvshmem
 pushd $WORKSPACE
@@ -141,9 +156,8 @@ clone_repo() {
 pushd $WORKSPACE
 clone_repo "https://github.com/ppl-ai/pplx-kernels" "pplx-kernels" "setup.py" "c336faf"
 cd pplx-kernels
-# see https://github.com/pypa/pip/issues/9955#issuecomment-838065925
-# PIP_NO_BUILD_ISOLATION=0 disables build isolation
-PIP_NO_BUILD_ISOLATION=0 pip install -vvv -e  .
+# Build wheel instead of install
+PIP_NO_BUILD_ISOLATION=0 pip wheel -vvv -w $WORKSPACE/wheels .
 popd
 
 # build and install deepep, require pytorch installed
@@ -151,5 +165,5 @@ pushd $WORKSPACE
 clone_repo "https://github.com/deepseek-ai/DeepEP" "DeepEP" "setup.py" "e3908bf"
 cd DeepEP
 export NVSHMEM_DIR=$WORKSPACE/nvshmem_install
-PIP_NO_BUILD_ISOLATION=0 pip install -vvv -e  .
+PIP_NO_BUILD_ISOLATION=0 pip wheel -vvv -w $WORKSPACE/wheels .
 popd

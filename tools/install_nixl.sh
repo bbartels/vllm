@@ -3,6 +3,9 @@
 
 FORCE=false
 JOBS=1
+
+
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --force)
@@ -121,6 +124,7 @@ if ! command -v nixl_test &> /dev/null || [ "$FORCE" = true ]; then
     cd build
     ninja -j"$JOBS"
     ninja -j"$JOBS" install
+    /bin/command-that-fails
 
     cd ../..
 else
