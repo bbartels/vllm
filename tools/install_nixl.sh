@@ -1,10 +1,24 @@
 #!/bin/bash
 # Usage: ./install_nixl.sh [--force] [--jobs N]
+set -ex
 
 FORCE=false
 JOBS=1
 
 
+export SCCACHE_ENDPOINT="http://172.31.7.53:9000"
+export SCCACHE_BUCKET_NAME=vllm-build-sccache
+export SCCACHE_REGION_NAME=us-west-2
+export SCCACHE_S3_NO_CREDENTIALS=1
+export SCCACHE_S3_USE_SSL=0
+export SCCACHE_IDLE_TIMEOUT=0
+export CC="sccache gcc"
+export CXX="sccache g++"
+export CMAKE_C_COMPILER_LAUNCHER=sccache
+export CMAKE_CXX_COMPILER_LAUNCHER=sccache
+export CMAKE_C_COMPILER_LAUNCHER=sccache
+export CMAKE_CXX_COMPILER_LAUNCHER=sccache
+export CMAKE_CUDA_COMPILER_LAUNCHER=sccache
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -60,7 +74,7 @@ if [ ! -e "/dev/gdrdrv" ] || [ "$FORCE" = true ]; then
     
     if $SUDO; then
         echo "Running insmod.sh with sudo"
-        sudo ./insmod.sh
+        #sudo ./insmod.sh
     else
         echo "Skipping insmod.sh - sudo not available"
         echo "Please run 'sudo ./gdrcopy-2.5/insmod.sh' manually if needed"
@@ -125,7 +139,6 @@ if ! command -v nixl_test &> /dev/null || [ "$FORCE" = true ]; then
     cd build
     ninja -j"$JOBS"
     ninja -j"$JOBS" install
-    /bin/command-that-fails
 
     cd ../..
 else

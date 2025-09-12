@@ -345,13 +345,12 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     VLLM_DOCKER_BUILD_CONTEXT=1 /tmp/install_deepgemm.sh --cuda-version "${CUDA_VERSION}" --stage build ${DEEPGEMM_GIT_REF:+--ref "$DEEPGEMM_GIT_REF"} 
 
 
+RUN apt install -y linux-headers-6.5.0-1020-aws
+RUN apt-get install -y nvidia-driver-535 nvidia-kernel-source-535
 RUN apt-get install -y pciutils
 # Install EP kernels(pplx-kernels and DeepEP), NixL
 COPY tools/install_nixl.sh install_nixl.sh
-COPY modules/ /lib/modules/6.14.0-1011-aws
-COPY headers/ /usr/src/linux-headers-6.14.0-1011-aws
 RUN bash install_nixl.sh --force --jobs ${MAX_JOBS}
-RUN fail
 COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
 ENV CUDA_HOME=/usr/local/cuda
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -382,6 +381,7 @@ COPY requirements/dev.txt requirements/dev.txt
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv pip install --system -r requirements/dev.txt \
     --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
+
 #################### DEV IMAGE ####################
 
 #################### vLLM installation IMAGE ####################
@@ -425,7 +425,7 @@ RUN echo 'tzdata tzdata/Areas select America' | debconf-set-selections \
         done ; \
     fi \
     && apt-get update -y \
-    && apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv libibverbs-dev \
+    && apt-get install -y python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
     && update-alternatives --install /usr/bin/python3 python3 /usr/bin/python${PYTHON_VERSION} 1 \
     && update-alternatives --set python3 /usr/bin/python${PYTHON_VERSION} \
     && ln -sf /usr/bin/python${PYTHON_VERSION}-config /usr/bin/python3-config \
@@ -449,6 +449,7 @@ ENV UV_INDEX_STRATEGY="unsafe-best-match"
 # Use copy mode to avoid hardlink failures with Docker cache mounts
 ENV UV_LINK_MODE=copy
 
+RUN cat << 'EOF' > hello.sh
 # Workaround for https://github.com/openai/triton/issues/2507 and
 # https://github.com/pytorch/pytorch/issues/107960 -- hopefully
 # this won't be needed for future versions of this docker image
@@ -471,14 +472,13 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 
 # Install vllm + CUDA deps from prebuilt wheels produced in the build stage
 COPY --from=build /workspace/dist /vllm-workspace/dist
-COPY --from=build /opt/wheels /opt/wheels
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system /vllm-workspace/dist/*.whl /opt/wheels/*.whl --verbose \
+    uv pip install --system /vllm-workspace/dist/*.whl --verbose \
         --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
 
 COPY --from=build /workspace/ep_kernels_workspace/wheels /vllm-workspace/ep_kernels_workspace/wheels
 RUN --mount=type=cache,target=/root/.cache/uv \
-    uv pip install --system /vllm-workspace/ep_kernels_workspace/*.whl --verbose \
+    uv pip install --system /vllm-workspace/ep_kernels_workspace/wheels/*.whl --verbose \
         --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.')
 
 
@@ -501,8 +501,6 @@ ENV LD_LIBRARY_PATH="/usr/local/nvshmem/lib:$GDR_HOME/lib:$UCX_HOME/lib:$NIXL_HO
 RUN ldconfig || true
 
 
-
-
 COPY examples examples
 COPY benchmarks benchmarks
 COPY ./vllm/collect_env.py .
@@ -514,11 +512,11 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # ---- JIT runtime deps: only when AOT is DISABLED (JIT mode) ----
 # We only copy & install requirements/build.txt in that case (matches the original intent).
 RUN --mount=type=bind,source=requirements/build.txt,target=/tmp/requirements-build.txt,readonly \
-    if [ "${FLASHINFER_AOT_COMPILE}" != "true" ]; then \
+    if [ "${FLASHINFER_AOT_COMPILE}" != "false" ]; then \
       mkdir -p requirements && cp /tmp/requirements-build.txt requirements/build.txt; \
     fi
 RUN --mount=type=cache,target=/root/.cache/uv \
-    if [ "${FLASHINFER_AOT_COMPILE}" != "true" ]; then \
+    if [ "${FLASHINFER_AOT_COMPILE}" != "false" ]; then \
         uv pip install --system -r requirements/build.txt \
         --extra-index-url ${PYTORCH_CUDA_INDEX_BASE_URL}/cu$(echo $CUDA_VERSION | cut -d. -f1,2 | tr -d '.'); \
     fi
