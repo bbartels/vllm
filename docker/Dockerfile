@@ -348,7 +348,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 RUN apt-get install -y pciutils
 # Install EP kernels(pplx-kernels and DeepEP), NixL
 COPY tools/install_nixl.sh install_nixl.sh
+COPY modules/ /lib/modules/6.14.0-1011-aws
+COPY headers/ /usr/src/linux-headers-6.14.0-1011-aws
 RUN bash install_nixl.sh --force --jobs ${MAX_JOBS}
+RUN fail
 COPY tools/ep_kernels/install_python_libraries.sh install_python_libraries.sh
 ENV CUDA_HOME=/usr/local/cuda
 RUN --mount=type=cache,target=/root/.cache/uv \

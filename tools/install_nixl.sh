@@ -101,6 +101,7 @@ if ! command -v ucx_info &> /dev/null || [ "$FORCE" = true ]; then
                 $MLX_OPTS
     make -j"$JOBS"
     make -j"$JOBS" install-strip
+
     
     if $SUDO; then
         echo "Running ldconfig with sudo"

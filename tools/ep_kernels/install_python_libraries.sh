@@ -30,6 +30,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 
+
 # fallback if not provided
 if [[ -z "$WORKSPACE" ]]; then
   WORKSPACE="$(pwd)/ep_kernels_workspace"
@@ -42,11 +43,19 @@ fi
 echo "Using workspace: $WORKSPACE"
 echo "Using jobs: $JOBS"
 
+export SCCACHE_ENDPOINT="http://172.31.44.143:9000"
+export SCCACHE_BUCKET_NAME=vllm-build-sccache
+export SCCACHE_REGION_NAME=us-west-2
+export SCCACHE_S3_NO_CREDENTIALS=0
+export SCCACHE_S3_USE_SSL=0
+export SCCACHE_IDLE_TIMEOUT=0
 export CMAKE_C_COMPILER_LAUNCHER=sccache
 export CMAKE_CXX_COMPILER_LAUNCHER=sccache
 export CMAKE_C_COMPILER_LAUNCHER=sccache
 export CMAKE_CXX_COMPILER_LAUNCHER=sccache
 export CMAKE_CUDA_COMPILER_LAUNCHER=sccache
+export AWS_ACCESS_KEY_ID=minio
+export AWS_SECRET_ACCESS_KEY=minio123
 sccache --show-stats || true
 
 # List of dependencies
