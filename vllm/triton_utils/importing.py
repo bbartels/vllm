@@ -19,8 +19,14 @@ def maybe_set_triton_cache_manager() -> None:
 
     mode = os.getenv("VLLM_TRITON_CACHE_MODE", "default").strip().lower()
     manager = None
-    if mode in {"hierarchical", "local"}:
-        manager = "vllm.triton_utils.cache_manager:HierarchicalFileCacheManager"
+    if mode == "hierarchical":
+        manager = "vllm.triton_cache_manager:HierarchicalFileCacheManager"
+    elif mode != "default":
+        logger.warning(
+            "Ignoring unknown VLLM_TRITON_CACHE_MODE=%r. Expected one of %s.",
+            mode,
+            ["default", "hierarchical"],
+        )
 
     if manager is not None:
         logger.info("Setting Triton cache manager to: %s", manager)

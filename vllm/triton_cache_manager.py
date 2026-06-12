@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
-import errno
 import json
 import os
 import shutil
@@ -11,21 +10,12 @@ from contextlib import suppress
 from pathlib import Path
 from typing import Optional
 
-from triton import knobs
 from triton.runtime.cache import FileCacheManager
 
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
 
-_EXPECTED_CACHE_READ_ERRNOS = {errno.ENOENT}
-if hasattr(errno, "ESTALE"):
-    _EXPECTED_CACHE_READ_ERRNOS.add(errno.ESTALE)
-
-_HIERARCHICAL_MANAGER = (
-    "vllm.triton_utils.cache_manager:HierarchicalFileCacheManager"
-)
-_VALID_CACHE_MODES = {"default", "hierarchical", "local"}
 _DEFAULT_LOCAL_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "vllm-triton-cache")
 
 
@@ -72,7 +62,7 @@ class HierarchicalFileCacheManager(FileCacheManager):
             return None
 
         shared_path = self.shared_cache_dir / filename
-        if not _safe_exists(shared_path):
+        if not _safe_exists(shared_path, optional=True):
             return None
 
         return self._materialize_shared_file(filename, shared_path)
@@ -90,10 +80,9 @@ class HierarchicalFileCacheManager(FileCacheManager):
             try:
                 _atomic_write_bytes(shared_path, payload)
             except OSError as exc:
-                logger.warning(
-                    "Failed to publish Triton cache artifact %s to shared cache %s: %s",
-                    filename,
-                    shared_path,
+                logger.warning_once(
+                    "Failed to publish Triton cache artifacts to shared cache %s: %s",
+                    self.shared_cache_dir,
                     exc,
                 )
 
@@ -110,7 +99,9 @@ class HierarchicalFileCacheManager(FileCacheManager):
         if self.shared_cache_dir is None:
             return None
 
-        shared_group = _read_group_from_dir(self.shared_cache_dir, filename)
+        shared_group = _read_group_from_dir(
+            self.shared_cache_dir, filename, optional=True
+        )
         if shared_group is None:
             return None
 
@@ -135,9 +126,8 @@ class HierarchicalFileCacheManager(FileCacheManager):
             try:
                 _write_group_manifest(self.shared_cache_dir, filename, shared_group)
             except OSError as exc:
-                logger.warning(
-                    "Failed to publish Triton cache group %s to shared cache %s: %s",
-                    filename,
+                logger.warning_once(
+                    "Failed to publish Triton cache groups to shared cache %s: %s",
                     self.shared_cache_dir,
                     exc,
                 )
@@ -153,10 +143,8 @@ class HierarchicalFileCacheManager(FileCacheManager):
 
         try:
             _atomic_copy_file(shared_path, local_path)
-        except OSError as exc:
-            if _is_cache_read_error(exc):
-                return None
-            raise
+        except OSError:
+            return None
 
         return str(local_path)
 
@@ -174,20 +162,6 @@ class HierarchicalFileCacheManager(FileCacheManager):
         return localized_group
 
 
-def get_configured_triton_cache_manager() -> Optional[str]:
-    mode = os.getenv("VLLM_TRITON_CACHE_MODE", "default").strip().lower()
-    if mode not in _VALID_CACHE_MODES:
-        logger.warning(
-            "Ignoring unknown VLLM_TRITON_CACHE_MODE=%r. Expected one of %s.",
-            mode,
-            sorted(_VALID_CACHE_MODES),
-        )
-        return None
-    if mode in {"hierarchical", "local"}:
-        return _HIERARCHICAL_MANAGER
-    return None
-
-
 def _resolve_local_cache_root() -> Path:
     local_root = os.getenv("VLLM_TRITON_LOCAL_CACHE_DIR", "").strip()
     if not local_root:
@@ -196,12 +170,8 @@ def _resolve_local_cache_root() -> Path:
 
 
 def _resolve_shared_cache_root() -> Optional[Path]:
-    mode = os.getenv("VLLM_TRITON_CACHE_MODE", "default").strip().lower()
-    if mode == "local":
-        return None
-
     shared_root = os.getenv("VLLM_TRITON_SHARED_CACHE_DIR", "").strip()
-    if not shared_root and mode == "hierarchical":
+    if not shared_root:
         shared_root = os.getenv("TRITON_CACHE_DIR", "").strip()
     return Path(shared_root) if shared_root else None
 
@@ -210,24 +180,20 @@ def _publish_enabled() -> bool:
     return bool(int(os.getenv("VLLM_TRITON_CACHE_PUBLISH", "1")))
 
 
-def _is_cache_read_error(exc: OSError) -> bool:
-    return exc.errno in _EXPECTED_CACHE_READ_ERRNOS
-
-
-def _safe_exists(path: Path) -> bool:
+def _safe_exists(path: Path, optional: bool = False) -> bool:
     try:
         return path.exists()
-    except OSError as exc:
-        if _is_cache_read_error(exc):
+    except OSError:
+        if optional:
             return False
         raise
 
 
 def _read_group_from_dir(
-    cache_dir: Path, filename: str
+    cache_dir: Path, filename: str, optional: bool = False
 ) -> Optional[dict[str, str]]:
     manifest_path = cache_dir / f"__grp__{filename}"
-    if not _safe_exists(manifest_path):
+    if not _safe_exists(manifest_path, optional=optional):
         return None
 
     try:
@@ -235,8 +201,8 @@ def _read_group_from_dir(
             group_data = json.load(f)
     except json.JSONDecodeError:
         return None
-    except OSError as exc:
-        if _is_cache_read_error(exc):
+    except OSError:
+        if optional:
             return None
         raise
 
@@ -248,7 +214,9 @@ def _read_group_from_dir(
     for child_name, child_path in child_paths.items():
         if not isinstance(child_name, str) or not isinstance(child_path, str):
             return None
-        if not _safe_exists(Path(child_path)):
+        if not _is_safe_child_name(child_name):
+            return None
+        if not _safe_exists(Path(child_path), optional=optional):
             return None
         result[child_name] = child_path
 
@@ -293,3 +261,13 @@ def _atomic_copy_file(source: Path, dest: Path) -> None:
         with suppress(FileNotFoundError):
             temp_path.unlink()
         shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+def _is_safe_child_name(child_name: str) -> bool:
+    child_path = Path(child_name)
+    return (
+        child_name != ""
+        and not child_path.is_absolute()
+        and child_path.name == child_name
+        and child_name not in {".", ".."}
+    )

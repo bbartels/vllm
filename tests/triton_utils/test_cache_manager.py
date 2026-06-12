@@ -13,6 +13,16 @@ from pathlib import Path
 import pytest
 
 
+MODULES_TO_CLEAR = (
+    "triton",
+    "triton.runtime",
+    "triton.runtime.cache",
+    "vllm.triton_cache_manager",
+    "vllm.triton_utils",
+    "vllm.triton_utils.importing",
+)
+
+
 def _clear_modules(*module_names: str) -> None:
     for module_name in module_names:
         sys.modules.pop(module_name, None)
@@ -70,14 +80,7 @@ class _FakeFileCacheManager:
 
 @pytest.fixture
 def cache_manager_module(monkeypatch, tmp_path):
-    _clear_modules(
-        "triton",
-        "triton.runtime",
-        "triton.runtime.cache",
-        "vllm.triton_utils",
-        "vllm.triton_utils.cache_manager",
-        "vllm.triton_utils.importing",
-    )
+    _clear_modules(*MODULES_TO_CLEAR)
 
     triton_module = types.ModuleType("triton")
     triton_module.__spec__ = ModuleSpec("triton", loader=None)
@@ -99,16 +102,11 @@ def cache_manager_module(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "triton.runtime", runtime_module)
     monkeypatch.setitem(sys.modules, "triton.runtime.cache", cache_module)
 
-    module = importlib.import_module("vllm.triton_utils.cache_manager")
+    module = importlib.import_module("vllm.triton_cache_manager")
     try:
         yield module
     finally:
-        _clear_modules(
-            "triton",
-            "triton.runtime",
-            "triton.runtime.cache",
-            "vllm.triton_utils.cache_manager",
-        )
+        _clear_modules(*MODULES_TO_CLEAR)
 
 
 def test_importing_sets_hierarchical_cache_manager(monkeypatch, importing_module):
@@ -118,7 +116,7 @@ def test_importing_sets_hierarchical_cache_manager(monkeypatch, importing_module
     importing_module.maybe_set_triton_cache_manager()
 
     assert os.environ["TRITON_CACHE_MANAGER"] == (
-        "vllm.triton_utils.cache_manager:HierarchicalFileCacheManager"
+        "vllm.triton_cache_manager:HierarchicalFileCacheManager"
     )
 
 
@@ -131,6 +129,15 @@ def test_importing_respects_user_cache_manager_override(
     importing_module.maybe_set_triton_cache_manager()
 
     assert os.environ["TRITON_CACHE_MANAGER"] == "custom:Manager"
+
+
+def test_invalid_mode_does_not_set_manager(monkeypatch, importing_module):
+    monkeypatch.delenv("TRITON_CACHE_MANAGER", raising=False)
+    monkeypatch.setenv("VLLM_TRITON_CACHE_MODE", "bogus")
+
+    importing_module.maybe_set_triton_cache_manager()
+
+    assert "TRITON_CACHE_MANAGER" not in os.environ
 
 
 def test_put_group_writes_local_and_shared_manifests(
@@ -155,6 +162,24 @@ def test_put_group_writes_local_and_shared_manifests(
     assert shared_manifest["child_paths"]["kernel.cubin"] == str(
         manager.shared_cache_dir / "kernel.cubin"
     )
+
+
+def test_get_file_materializes_shared_artifact_to_local(
+    monkeypatch, tmp_path, cache_manager_module
+):
+    monkeypatch.setenv("VLLM_TRITON_CACHE_MODE", "hierarchical")
+    monkeypatch.setenv("VLLM_TRITON_LOCAL_CACHE_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("VLLM_TRITON_SHARED_CACHE_DIR", str(tmp_path / "shared"))
+
+    manager = cache_manager_module.HierarchicalFileCacheManager("TESTKEY")
+    shared_artifact = manager.shared_cache_dir / "kernel.ptx"
+    shared_artifact.parent.mkdir(parents=True, exist_ok=True)
+    shared_artifact.write_bytes(b"shared-ptx")
+
+    materialized = manager.get_file("kernel.ptx")
+
+    assert materialized == str(manager.local_cache_dir / "kernel.ptx")
+    assert Path(materialized).read_bytes() == b"shared-ptx"
 
 
 def test_get_group_materializes_shared_artifacts_to_local(
@@ -205,7 +230,7 @@ def test_get_group_treats_estale_as_cache_miss(
     manager.shared_cache_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = manager.shared_cache_dir / "__grp__kernel.json"
     manifest_path.write_text(
-        json.dumps({"child_paths": {"kernel.cubin": "ignored-for-estale"}})
+        json.dumps({"child_paths": {"kernel.cubin": "kernel.cubin"}})
     )
 
     original_open = cache_manager_module.Path.open
@@ -216,6 +241,70 @@ def test_get_group_treats_estale_as_cache_miss(
         return original_open(self, *args, **kwargs)
 
     monkeypatch.setattr(cache_manager_module.Path, "open", _raise_estale)
+
+    assert manager.get_group("kernel.json") is None
+
+
+def test_get_group_treats_shared_eio_as_cache_miss(
+    monkeypatch, tmp_path, cache_manager_module
+):
+    monkeypatch.setenv("VLLM_TRITON_CACHE_MODE", "hierarchical")
+    monkeypatch.setenv("VLLM_TRITON_LOCAL_CACHE_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("VLLM_TRITON_SHARED_CACHE_DIR", str(tmp_path / "shared"))
+
+    manager = cache_manager_module.HierarchicalFileCacheManager("TESTKEY")
+    manager.shared_cache_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = manager.shared_cache_dir / "__grp__kernel.json"
+    manifest_path.write_text(
+        json.dumps({"child_paths": {"kernel.cubin": "kernel.cubin"}})
+    )
+
+    original_open = cache_manager_module.Path.open
+
+    def _raise_eio(self, *args, **kwargs):
+        if self == manifest_path:
+            raise OSError(errno.EIO, "I/O error")
+        return original_open(self, *args, **kwargs)
+
+    monkeypatch.setattr(cache_manager_module.Path, "open", _raise_eio)
+
+    assert manager.get_group("kernel.json") is None
+
+
+def test_get_file_treats_shared_copy_eio_as_cache_miss(
+    monkeypatch, tmp_path, cache_manager_module
+):
+    monkeypatch.setenv("VLLM_TRITON_CACHE_MODE", "hierarchical")
+    monkeypatch.setenv("VLLM_TRITON_LOCAL_CACHE_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("VLLM_TRITON_SHARED_CACHE_DIR", str(tmp_path / "shared"))
+
+    manager = cache_manager_module.HierarchicalFileCacheManager("TESTKEY")
+    shared_artifact = manager.shared_cache_dir / "kernel.ptx"
+    shared_artifact.parent.mkdir(parents=True, exist_ok=True)
+    shared_artifact.write_bytes(b"shared-ptx")
+
+    def _raise_eio(_source, _dest):
+        raise OSError(errno.EIO, "copy failed")
+
+    monkeypatch.setattr(cache_manager_module, "_atomic_copy_file", _raise_eio)
+
+    assert manager.get_file("kernel.ptx") is None
+
+
+def test_get_group_rejects_suspicious_child_name(
+    monkeypatch, tmp_path, cache_manager_module
+):
+    monkeypatch.setenv("VLLM_TRITON_CACHE_MODE", "hierarchical")
+    monkeypatch.setenv("VLLM_TRITON_LOCAL_CACHE_DIR", str(tmp_path / "local"))
+    monkeypatch.setenv("VLLM_TRITON_SHARED_CACHE_DIR", str(tmp_path / "shared"))
+
+    manager = cache_manager_module.HierarchicalFileCacheManager("TESTKEY")
+    outside = tmp_path / "outside.cubin"
+    outside.write_bytes(b"x")
+    manager.shared_cache_dir.mkdir(parents=True, exist_ok=True)
+    (manager.shared_cache_dir / "__grp__kernel.json").write_text(
+        json.dumps({"child_paths": {"../outside.cubin": str(outside)}})
+    )
 
     assert manager.get_group("kernel.json") is None
 
