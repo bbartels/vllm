@@ -11,6 +11,30 @@ from vllm.utils.math_utils import cdiv
 
 logger = init_logger(__name__)
 
+
+def maybe_set_triton_cache_manager() -> None:
+    """Configure Triton's cache manager before Triton is imported."""
+    if os.environ.get("TRITON_CACHE_MANAGER"):
+        return
+
+    mode = os.getenv("VLLM_TRITON_CACHE_MODE", "default").strip().lower()
+    manager = None
+    if mode == "hierarchical":
+        manager = "vllm.triton_cache_manager:HierarchicalFileCacheManager"
+    elif mode != "default":
+        logger.warning(
+            "Ignoring unknown VLLM_TRITON_CACHE_MODE=%r. Expected one of %s.",
+            mode,
+            ["default", "hierarchical"],
+        )
+
+    if manager is not None:
+        logger.info("Setting Triton cache manager to: %s", manager)
+        os.environ["TRITON_CACHE_MANAGER"] = manager
+
+
+maybe_set_triton_cache_manager()
+
 HAS_TRITON = (
     find_spec("triton") is not None
     or find_spec("pytorch-triton-xpu") is not None  # Not compatible
