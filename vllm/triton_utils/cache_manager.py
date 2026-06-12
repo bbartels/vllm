@@ -25,32 +25,8 @@ if hasattr(errno, "ESTALE"):
 _HIERARCHICAL_MANAGER = (
     "vllm.triton_utils.cache_manager:HierarchicalFileCacheManager"
 )
-_PROCESS_MANAGER = "vllm.triton_utils.cache_manager:ProcessFileCacheManager"
-_VALID_CACHE_MODES = {"default", "process", "hierarchical", "local"}
+_VALID_CACHE_MODES = {"default", "hierarchical", "local"}
 _DEFAULT_LOCAL_CACHE_ROOT = os.path.join(tempfile.gettempdir(), "vllm-triton-cache")
-
-
-class ProcessFileCacheManager(FileCacheManager):
-    """A per-process Triton cache manager.
-
-    This preserves the old vLLM behavior of isolating Triton writes by PID to
-    avoid same-node multiprocessing collisions.
-    """
-
-    def __init__(self, key, override: bool = False, dump: bool = False):
-        self.key = key
-        self.lock_path = None
-        if dump or override:
-            super().__init__(key, override=override, dump=dump)
-            return
-
-        cache_root = os.getenv("TRITON_CACHE_DIR", "").strip() or knobs.cache.dir
-        if not cache_root:
-            raise RuntimeError("Could not create or locate cache dir")
-
-        self.cache_dir = os.path.join(f"{cache_root}_{os.getpid()}", self.key)
-        self.lock_path = os.path.join(self.cache_dir, "lock")
-        os.makedirs(self.cache_dir, exist_ok=True)
 
 
 class HierarchicalFileCacheManager(FileCacheManager):
@@ -207,8 +183,6 @@ def get_configured_triton_cache_manager() -> Optional[str]:
             sorted(_VALID_CACHE_MODES),
         )
         return None
-    if mode == "process":
-        return _PROCESS_MANAGER
     if mode in {"hierarchical", "local"}:
         return _HIERARCHICAL_MANAGER
     return None

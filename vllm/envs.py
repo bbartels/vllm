@@ -87,7 +87,7 @@ if TYPE_CHECKING:
     VLLM_BATCH_INVARIANT: bool = False
     VLLM_TRITON_ATTN_USE_TD: bool | None = None
     VLLM_TRITON_CACHE_MODE: Literal[
-        "default", "process", "hierarchical", "local"
+        "default", "hierarchical", "local"
     ] = "default"
     VLLM_TRITON_LOCAL_CACHE_DIR: str = os.path.join(
         tempfile.gettempdir(), "vllm-triton-cache"
@@ -585,13 +585,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     ),
     # Controls Triton's file-cache layout in multi-process deployments.
     # default: keep Triton's default FileCacheManager behavior.
-    # process: isolate each process into its own writable cache root.
     # hierarchical: local writable cache + shared read/publish cache.
     # local: local writable cache only using the hierarchical manager.
     "VLLM_TRITON_CACHE_MODE": env_with_choices(
         "VLLM_TRITON_CACHE_MODE",
         "default",
-        ["default", "process", "hierarchical", "local"],
+        ["default", "hierarchical", "local"],
         case_sensitive=False,
     ),
     # Local writable Triton cache root used by the hierarchical cache manager.
