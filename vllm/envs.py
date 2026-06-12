@@ -86,6 +86,14 @@ if TYPE_CHECKING:
     VLLM_FLOAT32_MATMUL_PRECISION: Literal["highest", "high", "medium"] = "highest"
     VLLM_BATCH_INVARIANT: bool = False
     VLLM_TRITON_ATTN_USE_TD: bool | None = None
+    VLLM_TRITON_CACHE_MODE: Literal[
+        "default", "process", "hierarchical", "local"
+    ] = "default"
+    VLLM_TRITON_LOCAL_CACHE_DIR: str = os.path.join(
+        tempfile.gettempdir(), "vllm-triton-cache"
+    )
+    VLLM_TRITON_SHARED_CACHE_DIR: str = ""
+    VLLM_TRITON_CACHE_PUBLISH: bool = True
     MAX_JOBS: str | None = None
     NVCC_THREADS: str | None = None
     VLLM_USE_PRECOMPILED: bool = False
@@ -574,6 +582,31 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # ``0`` forces TD off.  Useful for A/B benchmarking the TD path.
     "VLLM_TRITON_ATTN_USE_TD": lambda: {"1": True, "0": False}.get(
         os.getenv("VLLM_TRITON_ATTN_USE_TD", "").strip()
+    ),
+    # Controls Triton's file-cache layout in multi-process deployments.
+    # default: keep Triton's default FileCacheManager behavior.
+    # process: isolate each process into its own writable cache root.
+    # hierarchical: local writable cache + shared read/publish cache.
+    # local: local writable cache only using the hierarchical manager.
+    "VLLM_TRITON_CACHE_MODE": env_with_choices(
+        "VLLM_TRITON_CACHE_MODE",
+        "default",
+        ["default", "process", "hierarchical", "local"],
+        case_sensitive=False,
+    ),
+    # Local writable Triton cache root used by the hierarchical cache manager.
+    "VLLM_TRITON_LOCAL_CACHE_DIR": lambda: os.getenv(
+        "VLLM_TRITON_LOCAL_CACHE_DIR",
+        os.path.join(tempfile.gettempdir(), "vllm-triton-cache"),
+    ),
+    # Optional shared Triton cache root used for hierarchical read/publish.
+    # If unset in hierarchical mode, vLLM falls back to TRITON_CACHE_DIR.
+    "VLLM_TRITON_SHARED_CACHE_DIR": lambda: os.getenv(
+        "VLLM_TRITON_SHARED_CACHE_DIR", ""
+    ),
+    # Best-effort publish toggle for hierarchical shared-cache writes.
+    "VLLM_TRITON_CACHE_PUBLISH": lambda: bool(
+        int(os.getenv("VLLM_TRITON_CACHE_PUBLISH", "1"))
     ),
     # Maximum number of compilation jobs to run in parallel.
     # By default this is the number of CPUs
