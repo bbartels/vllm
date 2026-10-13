@@ -800,7 +800,7 @@ def filter_safetensors_files_by_weight_name(
 ) -> list[str]:
     """Drop safetensors shards in which `is_unused_weight` accepts every tensor.
 
-    Loaders that read whole files (InstantTensor, fastsafetensors, multi-thread,
+    Loaders that read whole files (fastsafetensors, multi-thread,
     eager, prefetch) cannot skip single tensors, so dropping shards is their
     only way to avoid reading weights the model does not load.
 
@@ -1349,9 +1349,22 @@ def fastsafetensors_weights_iterator(
             pl.close()
 
 
+def _get_instanttensor_tensor_filter(
+    hf_weights_files: list[str], is_unused_weight: Callable[[str], bool]
+) -> list[str]:
+    tensor_filter: list[str] = []
+    for st_file in hf_weights_files:
+        with safe_open(st_file, framework="pt") as f:
+            names = f.keys()
+            tensor_filter.extend(name for name in names if not is_unused_weight(name))
+    return tensor_filter
+
+
 def instanttensor_weights_iterator(
     hf_weights_files: list[str],
     use_tqdm_on_load: bool,
+    *,
+    is_unused_weight: Callable[[str], bool] | None = None,
 ) -> Generator[tuple[str, torch.Tensor], None, None]:
     """Iterate over the weights in the model safetensor files
     using instanttensor library."""
@@ -1365,13 +1378,25 @@ def instanttensor_weights_iterator(
     if not current_platform.is_cuda():
         raise ValueError("InstantTensor requires NVIDIA GPUs")
 
-    try:
-        world_group = get_world_group()
-    except AssertionError:
-        # Entering here only in unit tests where the world group is not initialized.
+    tensor_filter = None
+    if is_unused_weight is not None:
+        tensor_filter = _get_instanttensor_tensor_filter(
+            hf_weights_files, is_unused_weight
+        )
+        if not tensor_filter:
+            return
+        # InstantTensor requires independent per-GPU reads when filtering.
         process_group = None
     else:
-        process_group = world_group.device_group if world_group.world_size > 1 else None
+        try:
+            world_group = get_world_group()
+        except AssertionError:
+            # The world group is not initialized in unit tests.
+            process_group = None
+        else:
+            process_group = (
+                world_group.device_group if world_group.world_size > 1 else None
+            )
 
     device = current_platform.current_device()
 
@@ -1383,6 +1408,8 @@ def instanttensor_weights_iterator(
         device=device,
         process_group=process_group,
         copy=True,
+        tensor_filter=tensor_filter,
+        tensor_name_match_mode="exact",
     ) as f:
         # Track bytes so the bar reports load throughput (GB/s).
         pbar = tqdm(
